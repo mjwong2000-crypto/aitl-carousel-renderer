@@ -2,32 +2,23 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import sharp from "sharp";
-import { v2 as cloudinary } from "cloudinary";
-import { v4 as uuidv4 } from "uuid";
 
 dotenv.config();
 
 const app = express();
 
+app.set("trust proxy", true);
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
 const PORT = process.env.PORT || 3000;
 const RENDER_KEY = process.env.AITL_RENDERER_KEY;
+const IMAGE_ACCESS_KEY = process.env.AITL_IMAGE_ACCESS_KEY || RENDER_KEY;
+const AIRTABLE_TOKEN = process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN;
 
-const CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME;
-const CLOUDINARY_API_KEY = process.env.CLOUDINARY_API_KEY;
-const CLOUDINARY_API_SECRET = process.env.CLOUDINARY_API_SECRET;
-
-if (!CLOUDINARY_CLOUD_NAME || !CLOUDINARY_API_KEY || !CLOUDINARY_API_SECRET) {
-  console.error("Missing Cloudinary environment variables.");
-}
-
-cloudinary.config({
-  cloud_name: CLOUDINARY_CLOUD_NAME,
-  api_key: CLOUDINARY_API_KEY,
-  api_secret: CLOUDINARY_API_SECRET
-});
+const AIRTABLE_BASE_ID = "app47YuxOKMw8vkCj";
+const AIRTABLE_TABLE_NAME = "AI Tool Radar";
+const AIRTABLE_TABLE_URL = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`;
 
 const WIDTH = 1080;
 const HEIGHT = 1350;
@@ -61,7 +52,7 @@ const DEFAULT_COPY = {
     "Before you quit a platform, test the angle.\nBad content makes good platforms look dead.\nSave this if you’re building with AI tools."
 };
 
-function requireAuth(req, res, next) {
+function requireServerAuth(req, res, next) {
   if (!RENDER_KEY) {
     return res.status(500).json({
       ok: false,
@@ -75,6 +66,26 @@ function requireAuth(req, res, next) {
     return res.status(401).json({
       ok: false,
       error: "Unauthorized renderer request"
+    });
+  }
+
+  next();
+}
+
+function requireImageAccess(req, res, next) {
+  if (!IMAGE_ACCESS_KEY) {
+    return res.status(500).json({
+      ok: false,
+      error: "Server missing AITL_IMAGE_ACCESS_KEY"
+    });
+  }
+
+  const suppliedKey = req.query.key;
+
+  if (!suppliedKey || suppliedKey !== IMAGE_ACCESS_KEY) {
+    return res.status(401).json({
+      ok: false,
+      error: "Unauthorized image request"
     });
   }
 
@@ -178,7 +189,7 @@ function textBlock({
       x="${x}"
       y="${y}"
       text-anchor="${anchor}"
-      font-family="Inter, Arial, Helvetica, sans-serif"
+      font-family="Arial, Helvetica, sans-serif"
       font-size="${fontSize}"
       font-weight="${weight}"
       fill="${fill}"
@@ -238,7 +249,7 @@ function shell({ eyebrow, slideNumber, bodySvg }) {
         </filter>
       </defs>
 
-      <rect width="${WIDTH}" height="${HEIGHT}" rx="0" fill="url(#bg)"/>
+      <rect width="${WIDTH}" height="${HEIGHT}" fill="url(#bg)"/>
 
       <circle cx="960" cy="120" r="210" fill="#DBEAFE" opacity="0.8"/>
       <circle cx="88" cy="1218" r="230" fill="#FCE7F3" opacity="0.75"/>
@@ -247,17 +258,17 @@ function shell({ eyebrow, slideNumber, bodySvg }) {
       <rect x="72" y="72" width="936" height="1206" rx="56" fill="#FFFFFF" filter="url(#shadow)"/>
 
       <rect x="112" y="112" width="250" height="48" rx="24" fill="#111827"/>
-      <text x="237" y="144" text-anchor="middle" font-family="Inter, Arial, Helvetica, sans-serif" font-size="22" font-weight="800" fill="#FFFFFF" letter-spacing="1.5">
+      <text x="237" y="144" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="800" fill="#FFFFFF" letter-spacing="1.5">
         AI TOOL MYTHBUSTER
       </text>
 
-      <text x="936" y="145" text-anchor="end" font-family="Inter, Arial, Helvetica, sans-serif" font-size="28" font-weight="800" fill="#94A3B8">
+      <text x="936" y="145" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="800" fill="#94A3B8">
         ${escapeXml(slideNumber)}
       </text>
 
       ${
         eyebrow
-          ? `<text x="112" y="230" font-family="Inter, Arial, Helvetica, sans-serif" font-size="30" font-weight="800" fill="#64748B" letter-spacing="1.2">${escapeXml(
+          ? `<text x="112" y="230" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="800" fill="#64748B" letter-spacing="1.2">${escapeXml(
               eyebrow
             )}</text>`
           : ""
@@ -265,17 +276,15 @@ function shell({ eyebrow, slideNumber, bodySvg }) {
 
       ${bodySvg}
 
-      <text x="112" y="1218" font-family="Inter, Arial, Helvetica, sans-serif" font-size="28" font-weight="800" fill="#94A3B8">
+      <text x="112" y="1218" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="800" fill="#94A3B8">
         AI Tool Logbook
       </text>
     </svg>
   `;
 }
 
-function buildSlides(input) {
-  const source = input?.source || {};
-
-  const copy = {
+function normalizeSource(source = {}) {
+  return {
     hookA: cleanText(source.hookA, DEFAULT_COPY.hookA),
     hookB: cleanText(source.hookB, DEFAULT_COPY.hookB),
     falseBelief: cleanText(source.falseBelief, DEFAULT_COPY.falseBelief),
@@ -287,9 +296,13 @@ function buildSlides(input) {
     proofLine: cleanText(source.proofLine, DEFAULT_COPY.proofLine),
     useBullets: cleanBullets(source.useBullets, DEFAULT_COPY.useBullets),
     skipBullets: cleanBullets(source.skipBullets, DEFAULT_COPY.skipBullets),
-    takeaway: cleanText(source.takeaway, DEFAULT_COPY.takeaway)
+    takeaway: cleanText(source.takeaway, DEFAULT_COPY.takeaway),
+    caption: cleanText(source.caption, "")
   };
+}
 
+function buildSlides(sourceInput = {}) {
+  const copy = normalizeSource(sourceInput);
   const slides = [];
 
   slides.push(
@@ -539,7 +552,7 @@ function buildSlides(input) {
   );
 
   const caption =
-    cleanText(source.caption) ||
+    copy.caption ||
     `${copy.hookA} ${copy.hookB}\n\nBefore you quit a platform, test the angle.\n\nUse ChatGPT to test assumptions, sharpen positioning, and turn vague ideas into repeatable formats.\n\nSave this if you’re building with AI tools.`;
 
   return {
@@ -549,39 +562,89 @@ function buildSlides(input) {
   };
 }
 
-function uploadBufferToCloudinary({ buffer, folder, publicId }) {
-  return new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
-      {
-        folder,
-        public_id: publicId,
-        resource_type: "image",
-        overwrite: true,
-        format: "png"
-      },
-      (error, result) => {
-        if (error) return reject(error);
-        return resolve(result);
-      }
-    );
+function sourceFromAirtableFields(fields = {}) {
+  return {
+    hookA: fields["AITL Carousel Hook A"],
+    hookB: fields["AITL Carousel Hook B"],
+    falseBelief: fields["AITL False Belief"],
+    reframeLine: fields["AITL Reframe Line"],
+    proofPrompt: fields["AITL Proof Prompt"],
+    proofBullets: fields["AITL Proof Bullets"],
+    proofNumber: fields["AITL Proof Number"],
+    proofContext: fields["AITL Proof Context"],
+    proofLine: fields["AITL Proof Line"],
+    useBullets: fields["AITL Use Bullets"],
+    skipBullets: fields["AITL Skip Bullets"],
+    takeaway: fields["AITL Takeaway"],
+    caption: fields["AITL Carousel Caption"]
+  };
+}
 
-    stream.end(buffer);
+function getPublicBaseUrl(req) {
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const proto = forwardedProto || req.protocol || "https";
+  return `${proto}://${req.get("host")}`;
+}
+
+async function fetchAirtableRecord(recordId) {
+  if (!AIRTABLE_TOKEN) {
+    throw new Error("Server missing AIRTABLE_PERSONAL_ACCESS_TOKEN");
+  }
+
+  const response = await fetch(`${AIRTABLE_TABLE_URL}/${recordId}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${AIRTABLE_TOKEN}`,
+      "Content-Type": "application/json"
+    }
   });
+
+  const text = await response.text();
+  let data;
+
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch (error) {
+    data = { raw: text };
+  }
+
+  if (!response.ok) {
+    throw new Error(`Airtable fetch failed: ${response.status} ${JSON.stringify(data)}`);
+  }
+
+  return data;
+}
+
+async function svgToPngBuffer(svg) {
+  return sharp(Buffer.from(svg))
+    .png({
+      quality: 100,
+      compressionLevel: 9
+    })
+    .toBuffer();
 }
 
 app.get("/health", (req, res) => {
   res.json({
     ok: true,
     service: "AI Tool Logbook Automated Carousel Renderer",
+    storage: "none",
+    cloudinary: false,
     timestamp: new Date().toISOString()
   });
 });
 
-app.post("/render/aitl-carousel", requireAuth, async (req, res) => {
-  const startedAt = Date.now();
-
+app.post("/render/aitl-carousel", requireServerAuth, async (req, res) => {
   try {
-    const recordId = cleanText(req.body?.recordId, "unknown-record");
+    const recordId = cleanText(req.body?.recordId);
+
+    if (!recordId) {
+      return res.status(400).json({
+        ok: false,
+        error: "Missing recordId"
+      });
+    }
+
     const style = cleanText(req.body?.style, "AI Tool MythBuster");
 
     if (style !== "AI Tool MythBuster") {
@@ -592,55 +655,66 @@ app.post("/render/aitl-carousel", requireAuth, async (req, res) => {
       });
     }
 
-    const renderId = `aitl_${recordId}_${uuidv4()}`;
-    const folder = `ai-tool-logbook/carousels/${renderId}`;
+    const source = req.body?.source || {};
+    const { caption } = buildSlides(source);
+    const renderId = `aitl_${recordId}`;
 
-    const { slides, caption } = buildSlides(req.body);
+    const baseUrl = getPublicBaseUrl(req);
 
-    const uploadedSlides = [];
-
-    for (let index = 0; index < slides.length; index++) {
-      const slideNumber = index + 1;
-
-      const pngBuffer = await sharp(Buffer.from(slides[index]))
-        .png({
-          quality: 100,
-          compressionLevel: 9
-        })
-        .toBuffer();
-
-      const uploaded = await uploadBufferToCloudinary({
-        buffer: pngBuffer,
-        folder,
-        publicId: `slide_${slideNumber}`
-      });
-
-      uploadedSlides.push({
-        slide: slideNumber,
-        url: uploaded.secure_url,
-        width: uploaded.width,
-        height: uploaded.height,
-        bytes: uploaded.bytes
-      });
-    }
+    const slideUrls = [1, 2, 3, 4, 5, 6, 7].map((slideNumber) => {
+      return `${baseUrl}/slides/${recordId}/${slideNumber}.png?key=${encodeURIComponent(
+        IMAGE_ACCESS_KEY
+      )}`;
+    });
 
     return res.json({
       ok: true,
       renderId,
       style,
-      slideUrls: uploadedSlides.map((slide) => slide.url),
-      slides: uploadedSlides,
+      slideUrls,
       caption,
-      notes: `Rendered ${uploadedSlides.length} PNG carousel slides at ${WIDTH}x${HEIGHT}. Runtime: ${
-        Date.now() - startedAt
-      }ms.`
+      notes: `Generated 7 live PNG slide URLs from renderer service. No Cloudinary. No external image storage.`
     });
   } catch (error) {
-    console.error("Carousel render failed:", error);
+    console.error("Carousel URL generation failed:", error);
 
     return res.status(500).json({
       ok: false,
-      error: "Carousel render failed",
+      error: "Carousel URL generation failed",
+      message: error?.message || String(error)
+    });
+  }
+});
+
+app.get("/slides/:recordId/:slideNumber.png", requireImageAccess, async (req, res) => {
+  try {
+    const recordId = req.params.recordId;
+    const slideNumber = Number(req.params.slideNumber);
+
+    if (!recordId || !Number.isInteger(slideNumber) || slideNumber < 1 || slideNumber > 7) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid slide URL"
+      });
+    }
+
+    const record = await fetchAirtableRecord(recordId);
+    const source = sourceFromAirtableFields(record.fields || {});
+    const { slides } = buildSlides(source);
+
+    const svg = slides[slideNumber - 1];
+    const pngBuffer = await svgToPngBuffer(svg);
+
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Cache-Control", "public, max-age=300");
+
+    return res.send(pngBuffer);
+  } catch (error) {
+    console.error("Slide render failed:", error);
+
+    return res.status(500).json({
+      ok: false,
+      error: "Slide render failed",
       message: error?.message || String(error)
     });
   }
