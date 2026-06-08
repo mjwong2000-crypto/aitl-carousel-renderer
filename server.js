@@ -302,31 +302,59 @@ function runFfmpeg(args) {
   });
 }
 
-async function renderSegmentFromPng(inputPath, outputPath, durationSeconds, slideIndex) {
-  const frames = Math.round(durationSeconds * FPS);
-  const zoomSpeed = slideIndex % 2 === 0 ? "0.00055" : "0.00075";
-  await runFfmpeg(["-y", "-loop", "1", "-i", inputPath, "-frames:v", String(frames), "-vf", `zoompan=z='min(zoom+${zoomSpeed},1.045)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS},format=yuv420p`, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", outputPath]);
-}
-
 async function renderMp4ForRecord(recordId) {
   const record = await fetchAirtableRecord(recordId);
   const source = sourceFromAirtableFields(record.fields || {});
   const { slides } = buildSlides(source);
-  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `aitl-v4-video-${recordId}-`));
+
+  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `aitl-v4-lite-video-${recordId}-`));
   const outputPath = path.join(workDir, "carousel.mp4");
-  const listPath = path.join(workDir, "segments.txt");
-  const segmentPaths = [];
-  for (let i = 0; i < slides.length; i++) {
-    const pngBuffer = await svgToPngBuffer(slides[i]);
-    const slidePath = path.join(workDir, `slide_${String(i + 1).padStart(3, "0")}.png`);
-    const segmentPath = path.join(workDir, `segment_${String(i + 1).padStart(3, "0")}.mp4`);
+  const listPath = path.join(workDir, "slides.txt");
+
+  const slidePaths = [];
+
+  for (let index = 0; index < slides.length; index++) {
+    const pngBuffer = await svgToPngBuffer(slides[index]);
+    const slidePath = path.join(workDir, `slide_${String(index + 1).padStart(3, "0")}.png`);
     await fs.writeFile(slidePath, pngBuffer);
-    await renderSegmentFromPng(slidePath, segmentPath, i === slides.length - 1 ? 3.6 : 2.8, i + 1);
-    segmentPaths.push(segmentPath);
+    slidePaths.push(slidePath);
   }
-  const concatText = segmentPaths.map((segmentPath) => `file '${segmentPath.replaceAll("'", "'\\''")}'`).join("\n");
+
+  let concatText = "";
+
+  for (let index = 0; index < slidePaths.length; index++) {
+    const duration = index === slidePaths.length - 1 ? 3.4 : 2.6;
+    concatText += `file '${slidePaths[index].replaceAll("'", "'\\''")}'\n`;
+    concatText += `duration ${duration}\n`;
+  }
+
+  concatText += `file '${slidePaths[slidePaths.length - 1].replaceAll("'", "'\\''")}'\n`;
+
   await fs.writeFile(listPath, concatText, "utf8");
-  await runFfmpeg(["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", "-movflags", "+faststart", outputPath]);
+
+  await runFfmpeg([
+    "-y",
+    "-f",
+    "concat",
+    "-safe",
+    "0",
+    "-i",
+    listPath,
+    "-vf",
+    `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=decrease,pad=${WIDTH}:${HEIGHT}:(ow-iw)/2:(oh-ih)/2,format=yuv420p`,
+    "-r",
+    "30",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "ultrafast",
+    "-crf",
+    "25",
+    "-movflags",
+    "+faststart",
+    outputPath
+  ]);
+
   return { workDir, outputPath };
 }
 
@@ -339,7 +367,7 @@ async function uploadMp4ToR2(recordId, filePath) {
 }
 
 async function safeCleanup(dirPath) {
-  if (!dirPath || !dirPath.includes("aitl-v4-video-")) return;
+  if (!dirPath || !dirPath.includes("aitl-v4-lite-video-")) return;
   try { await fs.rm(dirPath, { recursive: true, force: true }); } catch (error) { console.error("Cleanup failed:", error); }
 }
 
@@ -387,9 +415,10 @@ app.get("/health", (req, res) => {
     bucket: R2_BUCKET,
     cloudinary: false,
     layout: "visual-proof-carousel-v4",
-    video: "ffmpeg-r2-v4-vertical-motion-versioned-r2",
+    video: "ffmpeg-r2-v4-lite-versioned-r2",
     dimensions: `${WIDTH}x${HEIGHT}`,
     r2KeyPrefix: "aitl-carousel-v4",
+    renderMode: "v4-lite-single-ffmpeg-pass",
     queueRunning,
     queuedJobs: renderQueue.length,
     ffmpegPath: Boolean(ffmpegPath),
@@ -457,5 +486,5 @@ app.get("/slides/:recordId/:slideNumber.png", requireImageAccess, async (req, re
 });
 
 app.listen(PORT, () => {
-  console.log(`AI Tool Logbook V4 visual carousel renderer running on port ${PORT}`);
+  console.log(`AI Tool Logbook V4 Lite visual carousel renderer running on port ${PORT}`);
 });
