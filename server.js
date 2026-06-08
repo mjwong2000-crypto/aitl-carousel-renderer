@@ -15,8 +15,8 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "25mb" }));
 
-const WIDTH = 1080;
-const HEIGHT = 1920;
+const WIDTH = 720;
+const HEIGHT = 1280;
 const PORT = Number(process.env.PORT || 10000);
 
 const AIRTABLE_TOKEN = process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN || process.env.AIRTABLE_TOKEN || "";
@@ -32,7 +32,7 @@ const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || "";
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || "";
 const R2_BUCKET = process.env.R2_BUCKET || "aitl-renders";
 const R2_PUBLIC_BASE_URL = process.env.R2_PUBLIC_BASE_URL || "";
-const R2_PREFIX = "aitl-proof-footage-v2";
+const R2_PREFIX = "aitl-proof-footage-v2-safe";
 
 const r2Client = R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY
   ? new S3Client({
@@ -390,11 +390,11 @@ async function renderMp4ForRecord(recordId) {
       "-f", "concat",
       "-safe", "0",
       "-i", listPath,
-      "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+      "-vf", "scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
       "-r", "30",
       "-c:v", "libx264",
-      "-preset", "veryfast",
-      "-crf", "24",
+      "-preset", "ultrafast",
+      "-crf", "28",
       "-movflags", "+faststart",
       outputPath
     ]);
@@ -459,11 +459,11 @@ app.get("/health", (req, res) => {
     r2Configured: Boolean(r2Client && R2_PUBLIC_BASE_URL && R2_BUCKET),
     bucket: R2_BUCKET,
     cloudinary: false,
-    layout: "proof-footage-v2-scrollstop",
-    video: "ffmpeg-r2-proof-footage-v2",
+    layout: "proof-footage-v2-scrollstop-safe720",
+    video: "ffmpeg-r2-proof-footage-v2-safe720",
     dimensions: `${WIDTH}x${HEIGHT}`,
     r2KeyPrefix: R2_PREFIX,
-    renderMode: "proof-footage-v2-keyart-single-ffmpeg-pass-debug-visible",
+    renderMode: "proof-footage-v2-safe720-debug-visible",
     queueRunning,
     queuedJobs: renderQueue.length,
     ffmpegPath: Boolean(ffmpegPath),
