@@ -12,30 +12,27 @@ import { S3Client, PutObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s
 dotenv.config();
 
 const app = express();
-app.set("trust proxy", true);
 app.use(cors());
-app.use(express.json({ limit: "2mb" }));
-
-const PORT = process.env.PORT || 3000;
-const RENDER_KEY = process.env.AITL_RENDERER_KEY;
-const IMAGE_ACCESS_KEY = process.env.AITL_IMAGE_ACCESS_KEY || RENDER_KEY;
-const AIRTABLE_TOKEN = process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN;
-const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
-const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
-const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
-const R2_BUCKET = process.env.R2_BUCKET || "aitl-renders";
-const R2_PUBLIC_BASE_URL = process.env.R2_PUBLIC_BASE_URL;
-
-const AIRTABLE_BASE_ID = "app47YuxOKMw8vkCj";
-const AIRTABLE_TABLE_NAME = "AI Tool Radar";
-const AIRTABLE_TABLE_URL = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`;
+app.use(express.json({ limit: "25mb" }));
 
 const WIDTH = 1080;
 const HEIGHT = 1920;
-const R2_PREFIX = "aitl-proof-footage-v1";
-const renderJobs = new Map();
-const renderQueue = [];
-let queueRunning = false;
+const PORT = Number(process.env.PORT || 10000);
+
+const AIRTABLE_TOKEN = process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN || process.env.AIRTABLE_TOKEN || "";
+const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID || "app47YuxOKMw8vkCj";
+const AIRTABLE_TABLE_NAME = process.env.AIRTABLE_TABLE_NAME || "AI Tool Radar";
+const AIRTABLE_TABLE_URL = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`;
+
+const SERVER_RENDER_KEY = process.env.SERVER_RENDER_KEY || "aitl_carousel_2026_private_render_key_9041";
+const IMAGE_ACCESS_KEY = process.env.IMAGE_ACCESS_KEY || "aitl_carousel_image_access_2026";
+
+const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || "";
+const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || "";
+const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || "";
+const R2_BUCKET = process.env.R2_BUCKET || "aitl-renders";
+const R2_PUBLIC_BASE_URL = process.env.R2_PUBLIC_BASE_URL || "";
+const R2_PREFIX = "aitl-proof-footage-v2";
 
 const r2Client = R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY
   ? new S3Client({
@@ -45,405 +42,262 @@ const r2Client = R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY
     })
   : null;
 
-function requireServerAuth(req, res, next) {
-  if (!RENDER_KEY) return res.status(500).json({ ok: false, error: "Server missing AITL_RENDERER_KEY" });
-  if (req.headers["x-render-key"] !== RENDER_KEY) return res.status(401).json({ ok: false, error: "Unauthorized renderer request" });
-  next();
-}
-
-function requireImageAccess(req, res, next) {
-  if (!IMAGE_ACCESS_KEY || req.query.key !== IMAGE_ACCESS_KEY) return res.status(401).json({ ok: false, error: "Unauthorized image request" });
-  next();
-}
+let queueRunning = false;
+const renderQueue = [];
 
 function cleanText(value, fallback = "") {
-  if (Array.isArray(value)) return value.filter(Boolean).join("\n");
-  if (typeof value === "number") return String(value);
-  if (typeof value === "boolean") return value ? "true" : "false";
-  if (typeof value !== "string") return fallback;
-  const trimmed = value.trim();
-  return trimmed.length ? trimmed : fallback;
+  if (value === null || value === undefined) return fallback;
+  const out = String(value).replace(/\s+/g, " ").trim();
+  return out || fallback;
 }
 
-function cleanNumber(value, fallback = 0) {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  const parsed = Number(String(value || "").replace(/[^\d.]/g, ""));
-  return Number.isFinite(parsed) ? parsed : fallback;
+function escapeXml(value) {
+  return cleanText(value).replace(/[<>&'"]/g, (ch) => ({
+    "<": "&lt;",
+    ">": "&gt;",
+    "&": "&amp;",
+    "'": "&apos;",
+    '"': "&quot;"
+  }[ch]));
 }
 
-function esc(value) {
-  return String(value || "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
+function hardLimitText(value, max = 180) {
+  const s = cleanText(value);
+  return s.length <= max ? s : `${s.slice(0, max - 1).trim()}…`;
 }
 
-function hardLimitText(value, maxChars) {
-  const text = cleanText(value).replace(/\s+/g, " ").trim();
-  return text.length <= maxChars ? text : `${text.slice(0, maxChars - 1).trim()}…`;
-}
-
-function wrapLine(line, maxChars) {
-  const words = String(line).split(/\s+/).filter(Boolean);
+function textBlock({
+  text,
+  x,
+  y,
+  fontSize = 44,
+  weight = 900,
+  fill = "#FFFFFF",
+  maxChars = 24,
+  maxLines = 3,
+  lineHeight = 1.12,
+  anchor = "start",
+  family = "Arial, Helvetica, sans-serif",
+  letterSpacing = 0
+}) {
+  const words = cleanText(text).split(" ");
   const lines = [];
-  let current = "";
+  let line = "";
   for (const word of words) {
-    const test = current ? `${current} ${word}` : word;
-    if (test.length <= maxChars) current = test;
-    else {
-      if (current) lines.push(current);
-      current = word.length > maxChars ? `${word.slice(0, maxChars - 1)}…` : word;
+    const candidate = line ? `${line} ${word}` : word;
+    if (candidate.length > maxChars && line) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = candidate;
     }
+    if (lines.length >= maxLines) break;
   }
-  if (current) lines.push(current);
-  return lines.length ? lines : [""];
+  if (line && lines.length < maxLines) lines.push(line);
+  return lines.map((l, i) => {
+    const yy = y + i * fontSize * lineHeight;
+    return `<text x="${x}" y="${yy}" font-family="${family}" font-size="${fontSize}" font-weight="${weight}" fill="${fill}" text-anchor="${anchor}" letter-spacing="${letterSpacing}">${escapeXml(l)}</text>`;
+  }).join("\n");
 }
 
-function wrapText(value, maxChars, maxLines = 99) {
-  const rawLines = cleanText(value).split("\n");
-  const lines = rawLines.flatMap((line) => wrapLine(line, maxChars));
-  if (lines.length <= maxLines) return lines;
-  const clipped = lines.slice(0, maxLines);
-  clipped[maxLines - 1] = hardLimitText(clipped[maxLines - 1], Math.max(8, maxChars));
-  return clipped;
-}
-
-function textBlock({ text, x, y, fontSize = 48, weight = 800, fill = "#FFFFFF", maxChars = 24, maxLines = 99, lineHeight = 1.12, anchor = "start", opacity = 1, letterSpacing = 0 }) {
-  const lines = wrapText(text, maxChars, maxLines);
-  const tspans = lines.map((line, index) => `<tspan x="${x}" dy="${index === 0 ? 0 : fontSize * lineHeight}">${esc(line)}</tspan>`).join("");
-  return `<text x="${x}" y="${y}" text-anchor="${anchor}" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="${weight}" fill="${fill}" opacity="${opacity}" letter-spacing="${letterSpacing}">${tspans}</text>`;
-}
-
-function pill({ x, y, w, h, fill = "#FFFFFF", stroke = "none", text = "", textFill = "#0F172A", fontSize = 24 }) {
-  return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${h / 2}" fill="${fill}" stroke="${stroke}" stroke-width="${stroke === "none" ? 0 : 3}"/>${textBlock({ text, x: x + w / 2, y: y + h / 2 + fontSize * 0.36, fontSize, weight: 950, fill: textFill, maxChars: 32, maxLines: 1, anchor: "middle", letterSpacing: 1 })}`;
-}
-
-function progressBar(slideIndex) {
-  const total = 7;
-  const gap = 12;
-  const barWidth = 110;
-  const startX = 112;
-  const y = 1760;
-  let output = "";
-  for (let i = 1; i <= total; i++) {
-    output += `<rect x="${startX + (i - 1) * (barWidth + gap)}" y="${y}" width="${barWidth}" height="10" rx="5" fill="${i <= slideIndex ? "#38BDF8" : "#334155"}"/>`;
-  }
-  return output;
-}
-
-function proofShell({ slideIndex, label, toolName, bodySvg, dark = true }) {
-  const panelFill = dark ? "#08111F" : "#FFFFFF";
-  const stroke = dark ? "#1E3A8A" : "#CBD5E1";
-  const muted = dark ? "#93A4B8" : "#64748B";
-  const logoFill = dark ? "#FFFFFF" : "#020617";
-  const logoText = dark ? "#020617" : "#FFFFFF";
-
-  return `<svg width="${WIDTH}" height="${HEIGHT}" viewBox="0 0 ${WIDTH} ${HEIGHT}" xmlns="http://www.w3.org/2000/svg">
-    <defs>
-      <linearGradient id="pageBg" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0%" stop-color="#020617"/>
-        <stop offset="48%" stop-color="#0B1120"/>
-        <stop offset="100%" stop-color="#312E81"/>
-      </linearGradient>
-      <linearGradient id="cyanGlow" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0%" stop-color="#38BDF8"/>
-        <stop offset="52%" stop-color="#2563EB"/>
-        <stop offset="100%" stop-color="#7C3AED"/>
-      </linearGradient>
-      <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="24" stdDeviation="30" flood-color="#000000" flood-opacity="0.42"/></filter>
-      <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="20" result="coloredBlur"/><feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-    </defs>
-    <rect width="${WIDTH}" height="${HEIGHT}" fill="url(#pageBg)"/>
-    <circle cx="900" cy="260" r="320" fill="#2563EB" opacity="0.16" filter="url(#softGlow)"/>
-    <circle cx="120" cy="1530" r="340" fill="#7C3AED" opacity="0.16" filter="url(#softGlow)"/>
-    <rect x="58" y="58" width="964" height="1804" rx="54" fill="${panelFill}" stroke="${stroke}" stroke-width="3" filter="url(#shadow)"/>
-    <rect x="58" y="58" width="964" height="18" rx="9" fill="url(#cyanGlow)"/>
-    ${pill({ x: 100, y: 106, w: 310, h: 56, fill: logoFill, text: "AI TOOL LOGBOOK", textFill: logoText, fontSize: 22 })}
-    ${pill({ x: 100, y: 184, w: 300, h: 48, fill: "#0F172A", stroke: "#38BDF8", text: label, textFill: "#7DD3FC", fontSize: 21 })}
-    ${textBlock({ text: `${String(slideIndex).padStart(2, "0")} / 07`, x: 940, y: 148, fontSize: 32, weight: 950, fill: muted, maxChars: 10, maxLines: 1, anchor: "end" })}
-    ${bodySvg}
-    ${textBlock({ text: hardLimitText(toolName, 42), x: 100, y: 1715, fontSize: 30, weight: 900, fill: muted, maxChars: 38, maxLines: 2 })}
-    ${progressBar(slideIndex)}
-  </svg>`;
-}
-
-function terminalWindow({ x, y, w, h, title = "api test", lines = [], prompt = "" }) {
-  let output = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="34" fill="#020617" stroke="#334155" stroke-width="4"/>`;
-  output += `<rect x="${x}" y="${y}" width="${w}" height="86" rx="34" fill="#0F172A"/>`;
-  output += `<circle cx="${x + 48}" cy="${y + 43}" r="13" fill="#EF4444"/><circle cx="${x + 88}" cy="${y + 43}" r="13" fill="#F59E0B"/><circle cx="${x + 128}" cy="${y + 43}" r="13" fill="#22C55E"/>`;
-  output += textBlock({ text: title, x: x + 170, y: y + 53, fontSize: 26, weight: 900, fill: "#CBD5E1", maxChars: 30, maxLines: 1 });
-  let currentY = y + 145;
-  for (const line of lines.slice(0, 8)) {
-    output += textBlock({ text: line, x: x + 46, y: currentY, fontSize: 30, weight: 850, fill: "#D1FAE5", maxChars: 44, maxLines: 1 });
-    currentY += 54;
-  }
-  if (prompt) {
-    output += `<rect x="${x + 34}" y="${currentY + 10}" width="${w - 68}" height="${Math.min(240, h - (currentY - y) - 48)}" rx="24" fill="#111827" stroke="#1E40AF" stroke-width="3"/>`;
-    output += textBlock({ text: prompt, x: x + 62, y: currentY + 70, fontSize: 28, weight: 750, fill: "#E5E7EB", maxChars: 46, maxLines: 5, lineHeight: 1.16 });
-  }
-  return output;
-}
-
-function documentBox({ x, y, w, h, title = "source input", text = "", accent = "#38BDF8" }) {
-  let output = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="34" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="4"/>`;
-  output += `<rect x="${x}" y="${y}" width="${w}" height="82" rx="34" fill="#EFF6FF"/>`;
-  output += `<rect x="${x}" y="${y + 64}" width="${w}" height="18" fill="#EFF6FF"/>`;
-  output += textBlock({ text: title.toUpperCase(), x: x + 40, y: y + 52, fontSize: 26, weight: 950, fill: "#1D4ED8", maxChars: 34, maxLines: 1, letterSpacing: 1 });
-  output += `<rect x="${x + 40}" y="${y + 120}" width="14" height="${h - 170}" rx="7" fill="${accent}"/>`;
-  output += textBlock({ text, x: x + 80, y: y + 170, fontSize: 32, weight: 780, fill: "#0F172A", maxChars: 39, maxLines: 13, lineHeight: 1.16 });
-  return output;
-}
-
-function outputReceipt({ x, y, w, h, title = "actual output", text = "" }) {
-  let output = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="36" fill="#F8FAFC" stroke="#94A3B8" stroke-width="4"/>`;
-  output += `<rect x="${x + 30}" y="${y + 30}" width="${w - 60}" height="78" rx="24" fill="#020617"/>`;
-  output += textBlock({ text: title.toUpperCase(), x: x + 60, y: y + 80, fontSize: 26, weight: 950, fill: "#38BDF8", maxChars: 36, maxLines: 1, letterSpacing: 1 });
-  const lines = wrapText(text, 46, 15);
-  let cy = y + 160;
-  lines.forEach((line, index) => {
-    const fill = index % 2 === 0 ? "#FFFFFF" : "#EEF2FF";
-    output += `<rect x="${x + 30}" y="${cy - 36}" width="${w - 60}" height="52" rx="12" fill="${fill}"/>`;
-    output += textBlock({ text: line, x: x + 58, y: cy, fontSize: 27, weight: 780, fill: "#0F172A", maxChars: 46, maxLines: 1 });
-    cy += 58;
-  });
-  return output;
-}
-
-function metricTile({ x, y, w, h, label, value, accent = "#38BDF8" }) {
-  return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="34" fill="#0F172A" stroke="${accent}" stroke-width="4"/>
-    ${textBlock({ text: label.toUpperCase(), x: x + 32, y: y + 54, fontSize: 24, weight: 950, fill: "#94A3B8", maxChars: 22, maxLines: 1, letterSpacing: 1 })}
-    ${textBlock({ text: value, x: x + w / 2, y: y + 142, fontSize: 58, weight: 950, fill: "#FFFFFF", maxChars: 12, maxLines: 1, anchor: "middle" })}`;
-}
-
-function splitOutputLines(value, max = 6) {
-  const raw = cleanText(value)
+function splitOutputLines(value, max = 8) {
+  return cleanText(value)
     .split(/\n+/)
     .map((line) => line.replace(/^[-•*\d.)\s]+/, "").trim())
-    .filter((line) => line.length >= 12);
-  return raw.slice(0, max);
+    .filter((line) => line.length >= 12)
+    .slice(0, max);
 }
 
-function normalizeSource(source = {}) {
-  const metric1Label = cleanText(source.metric1Label, "Response time");
-  const metric1Value = cleanText(source.metric1Value, "--");
-  const metric2Label = cleanText(source.metric2Label, "Output length");
-  const metric2Value = cleanText(source.metric2Value, "--");
-  const metric3Label = cleanText(source.metric3Label, "Usability");
-  const metric3Value = cleanText(source.metric3Value, "--");
+function attachmentUrl(value) {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value) && value.length > 0) {
+    const first = value[0];
+    return first?.url || first?.thumbnails?.large?.url || first?.thumbnails?.full?.url || "";
+  }
+  if (typeof value === "object") return value.url || value?.thumbnails?.large?.url || value?.thumbnails?.full?.url || "";
+  return "";
+}
 
-  const outputExcerpt = cleanText(source.proofOutputExcerpt || source.actualOutput || source.testResult || source.rawOutput, "No output excerpt captured yet.");
-  const messyInput = cleanText(source.messyInput || source.proofInput, "No messy source input captured yet.");
-  const prompt = cleanText(source.testPrompt || source.proofPrompt, "No test prompt captured yet.");
-  const verdict = cleanText(source.proofVerdict || source.honestVerdict || source.verdict, "No verdict captured yet.");
-  const runner = cleanText(source.proofRunner, source.toolName || "AI API");
-  const testType = cleanText(source.proofTestType, "API Text Output");
+async function fetchBuffer(url) {
+  if (!url) return null;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    return Buffer.from(await response.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
 
+async function imageToDataUri(url) {
+  const buffer = await fetchBuffer(url);
+  if (!buffer) return "";
+  const png = await sharp(buffer).png().toBuffer();
+  return `data:image/png;base64,${png.toString("base64")}`;
+}
+
+async function keyArtCover(url) {
+  const buffer = await fetchBuffer(url);
+  if (!buffer) return null;
+  return sharp(buffer).resize(WIDTH, HEIGHT, { fit: "cover", position: "center" }).png().toBuffer();
+}
+
+function normalizeSource(fields = {}) {
+  const outputExcerpt = cleanText(fields["AITL Proof Output Excerpt"] || fields["AITL Actual Output"] || fields["AITL Test Result"] || fields["AITL Proof Raw Output"], "No output captured yet.");
+  const toolName = cleanText(fields["Tool Name"], "ChatGPT / OpenAI API");
   return {
-    toolName: cleanText(source.toolName, "AI Tool"),
-    title: cleanText(source.title, "Real AI Tool Test"),
-    shockFaceUrl: cleanText(source.shockFaceUrl, ""),
-    runner,
-    testType,
-    viewerProblem: cleanText(source.viewerProblem, "Creators need repeatable content output, not another generic AI tip."),
-    toolAction: cleanText(source.toolAction, "Run the real workflow through the API and judge the output."),
-    messyInput,
-    prompt,
-    rawOutput: cleanText(source.rawOutput, outputExcerpt),
+    toolName,
+    title: cleanText(fields["Title"], "I tested an AI tool with a real workflow"),
+    keyArtUrl: attachmentUrl(fields["AITL Video Key Art"]),
+    reactionImageUrl: attachmentUrl(fields["AITL Reaction Image"]),
+    metric1Label: cleanText(fields["AITL Proof Metric 1 Label"], "Response time"),
+    metric1Value: cleanText(fields["AITL Proof Metric One Value"], "22.24s"),
+    metric2Label: cleanText(fields["AITL Proof Metric 2 Label"], "Output length"),
+    metric2Value: cleanText(fields["AITL Proof Metric Two Result"], "6651 chars"),
+    metric3Label: cleanText(fields["AITL Proof Metric Three Label"], "Usability score"),
+    metric3Value: cleanText(fields["AITL Proof Metric Three Result"], "10/10"),
+    proofInput: cleanText(fields["AITL Proof Input"] || fields["AITL Messy Input"], "Messy Facebook content framework"),
+    proofPrompt: cleanText(fields["AITL Proof Prompt"] || fields["AITL Test Prompt"], "Write a creator workflow test"),
+    rawOutput: cleanText(fields["AITL Proof Raw Output"], outputExcerpt),
     outputExcerpt,
-    metric1Label,
-    metric1Value,
-    metric2Label,
-    metric2Value,
-    metric3Label,
-    metric3Value,
-    completedAt: cleanText(source.completedAt, "captured now"),
-    proofContext: cleanText(source.proofContext, `${runner} returned a real API result for ${testType}.`),
-    verdict,
-    comedyReaction: cleanText(source.comedyReaction, "This is actual output, not a homepage review."),
-    useItIf: cleanText(source.useItIf, "You have a real framework and need repeatable creator output."),
-    skipItIf: cleanText(source.skipItIf, "You expect useful output from vague prompts."),
-    caption: cleanText(source.caption, "")
+    verdict: cleanText(fields["AITL Proof Verdict"] || fields["AITL Honest Verdict"], "Worth testing with a real framework."),
+    caption: cleanText(fields["AITL Carousel Caption"], `${toolName} tested with real input and real API output.`)
   };
 }
 
-function browserFrame({ x = 64, y = 126, w = 952, h = 1500, title = "AI Tool Logbook Live Test", url = "api.openai.com / real output" }) {
+function baseSvg(slideIndex, label = "REAL API TEST") {
   return `
-    <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="42" fill="#07111F" stroke="#1E3A8A" stroke-width="4" filter="url(#shadow)"/>
-    <rect x="${x}" y="${y}" width="${w}" height="94" rx="42" fill="#0F172A"/>
-    <rect x="${x}" y="${y + 50}" width="${w}" height="44" fill="#0F172A"/>
-    <circle cx="${x + 52}" cy="${y + 47}" r="13" fill="#EF4444"/>
-    <circle cx="${x + 92}" cy="${y + 47}" r="13" fill="#F59E0B"/>
-    <circle cx="${x + 132}" cy="${y + 47}" r="13" fill="#22C55E"/>
-    <rect x="${x + 190}" y="${y + 24}" width="${w - 245}" height="46" rx="23" fill="#020617" stroke="#1E293B" stroke-width="2"/>
-    ${textBlock({ text: url, x: x + 216, y: y + 55, fontSize: 23, weight: 850, fill: "#94A3B8", maxChars: 50, maxLines: 1 })}
-    ${textBlock({ text: title, x: x + 42, y: y + 142, fontSize: 30, weight: 950, fill: "#E5E7EB", maxChars: 40, maxLines: 1 })}
-  `;
-}
-
-function aiBg({ slideIndex = 1, label = "REAL AI TOOL TEST" }) {
-  return `
-    <svg width="${WIDTH}" height="${HEIGHT}" viewBox="0 0 ${WIDTH} ${HEIGHT}" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stop-color="#020617"/>
-          <stop offset="52%" stop-color="#07111F"/>
-          <stop offset="100%" stop-color="#111827"/>
-        </linearGradient>
-        <linearGradient id="brand" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stop-color="#00D9FF"/>
-          <stop offset="50%" stop-color="#2563EB"/>
-          <stop offset="100%" stop-color="#7C3AED"/>
-        </linearGradient>
-        <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
-          <feDropShadow dx="0" dy="22" stdDeviation="25" flood-color="#000000" flood-opacity="0.46"/>
-        </filter>
-      </defs>
-      <rect width="${WIDTH}" height="${HEIGHT}" fill="url(#bg)"/>
-      <circle cx="930" cy="270" r="370" fill="#2563EB" opacity="0.18"/>
-      <circle cx="120" cy="1560" r="370" fill="#7C3AED" opacity="0.17"/>
-      <rect x="0" y="0" width="${WIDTH}" height="20" fill="url(#brand)"/>
-      <rect x="0" y="${HEIGHT - 20}" width="${WIDTH}" height="20" fill="url(#brand)"/>
-      <rect x="64" y="56" width="300" height="58" rx="29" fill="#FFFFFF"/>
-      ${textBlock({ text: "AI TOOL LOGBOOK", x: 214, y: 94, fontSize: 25, weight: 950, fill: "#020617", maxChars: 21, maxLines: 1, anchor: "middle", letterSpacing: 1 })}
-      <rect x="64" y="132" width="320" height="54" rx="27" fill="#06121F" stroke="#38BDF8" stroke-width="3"/>
-      ${textBlock({ text: label, x: 224, y: 168, fontSize: 23, weight: 950, fill: "#7DD3FC", maxChars: 22, maxLines: 1, anchor: "middle", letterSpacing: 1 })}
-      ${textBlock({ text: `${String(slideIndex).padStart(2, "0")} / 07`, x: 948, y: 112, fontSize: 34, weight: 950, fill: "#CBD5E1", maxChars: 8, maxLines: 1, anchor: "end" })}
+  <svg width="${WIDTH}" height="${HEIGHT}" viewBox="0 0 ${WIDTH} ${HEIGHT}" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="#020617"/>
+        <stop offset="50%" stop-color="#07111F"/>
+        <stop offset="100%" stop-color="#050A17"/>
+      </linearGradient>
+      <linearGradient id="cyanPurple" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="#00D9FF"/>
+        <stop offset="50%" stop-color="#2563EB"/>
+        <stop offset="100%" stop-color="#A855F7"/>
+      </linearGradient>
+      <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+        <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#000000" flood-opacity="0.55"/>
+      </filter>
+      <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+        <feDropShadow dx="0" dy="0" stdDeviation="12" flood-color="#38BDF8" flood-opacity="0.85"/>
+      </filter>
+    </defs>
+    <rect width="${WIDTH}" height="${HEIGHT}" fill="url(#bg)"/>
+    <circle cx="960" cy="350" r="430" fill="#2563EB" opacity="0.20"/>
+    <circle cx="130" cy="1540" r="430" fill="#A855F7" opacity="0.18"/>
+    <path d="M40 140 C300 70 760 80 1040 130" stroke="#2563EB" stroke-width="3" opacity="0.35" fill="none"/>
+    <path d="M70 1640 C360 1560 760 1580 1030 1640" stroke="#A855F7" stroke-width="3" opacity="0.35" fill="none"/>
+    <rect x="120" y="48" width="840" height="96" rx="24" fill="#06121F" stroke="#38BDF8" stroke-width="5" filter="url(#glow)"/>
+    ${textBlock({ text: "AI TOOL LOGBOOK", x: 540, y: 112, fontSize: 54, weight: 950, fill: "#FFFFFF", maxChars: 22, maxLines: 1, anchor: "middle" })}
+    <rect x="602" y="170" width="340" height="64" rx="20" fill="#12091F" stroke="#D946EF" stroke-width="4" filter="url(#shadow)"/>
+    ${textBlock({ text: label, x: 772, y: 214, fontSize: 30, weight: 950, fill: "#FFFFFF", maxChars: 18, maxLines: 1, anchor: "middle" })}
+    ${textBlock({ text: `${String(slideIndex).padStart(2, "0")} / 07`, x: 976, y: 110, fontSize: 24, weight: 900, fill: "#CBD5E1", maxChars: 8, maxLines: 1, anchor: "end" })}
   `;
 }
 
 function closeSvg() {
-  return `</svg>`;
+  return "</svg>";
 }
 
-function terminalBox({ x, y, w, h, lines = [] }) {
-  let out = `
-    <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="32" fill="#020617" stroke="#334155" stroke-width="4"/>
-    <rect x="${x}" y="${y}" width="${w}" height="76" rx="32" fill="#111827"/>
-    <circle cx="${x + 42}" cy="${y + 38}" r="12" fill="#EF4444"/>
-    <circle cx="${x + 80}" cy="${y + 38}" r="12" fill="#F59E0B"/>
-    <circle cx="${x + 118}" cy="${y + 38}" r="12" fill="#22C55E"/>
-    ${textBlock({ text: "LIVE API CALL", x: x + 160, y: y + 48, fontSize: 24, weight: 950, fill: "#D1FAE5", maxChars: 28, maxLines: 1, letterSpacing: 1 })}
-  `;
-  let yy = y + 130;
-  for (const line of lines.slice(0, 8)) {
-    out += textBlock({ text: line, x: x + 42, y: yy, fontSize: 27, weight: 850, fill: "#D1FAE5", maxChars: 42, maxLines: 1, family: "Courier New, monospace" });
-    yy += 52;
-  }
-  return out;
-}
-
-function outputReceipt({ x, y, w, h, lines = [], highlight = 1 }) {
-  let out = `
-    <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="34" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="3"/>
-    <rect x="${x + 28}" y="${y + 28}" width="${w - 56}" height="68" rx="24" fill="#0F172A"/>
-    ${textBlock({ text: "ACTUAL OUTPUT RECEIPT", x: x + 64, y: y + 72, fontSize: 25, weight: 950, fill: "#38BDF8", maxChars: 30, maxLines: 1, letterSpacing: 1 })}
-  `;
-  let yy = y + 148;
-  lines.slice(0, 8).forEach((line, idx) => {
-    const isHot = idx === highlight;
-    out += `<rect x="${x + 34}" y="${yy - 36}" width="${w - 68}" height="58" rx="16" fill="${isHot ? "#DBEAFE" : idx % 2 ? "#EEF2FF" : "#FFFFFF"}" stroke="${isHot ? "#2563EB" : "none"}" stroke-width="${isHot ? 3 : 0}"/>`;
-    out += textBlock({ text: line, x: x + 62, y: yy, fontSize: 26, weight: isHot ? 950 : 820, fill: "#0F172A", maxChars: 42, maxLines: 1 });
-    yy += 64;
-  });
-  return out;
-}
-
-function metricCard({ x, y, label, value, color }) {
+function metricCard({ x, y, label, value, color, icon = "●" }) {
   return `
-    <rect x="${x}" y="${y}" width="300" height="150" rx="30" fill="#020617" stroke="${color}" stroke-width="4" filter="url(#shadow)"/>
-    ${textBlock({ text: label.toUpperCase(), x: x + 28, y: y + 46, fontSize: 22, weight: 950, fill: "#94A3B8", maxChars: 19, maxLines: 1, letterSpacing: 1 })}
-    ${textBlock({ text: value, x: x + 150, y: y + 112, fontSize: 46, weight: 950, fill: "#FFFFFF", maxChars: 13, maxLines: 1, anchor: "middle" })}
+    <rect x="${x}" y="${y}" width="320" height="150" rx="28" fill="#020617" stroke="${color}" stroke-width="4" filter="url(#shadow)"/>
+    ${textBlock({ text: icon, x: x + 48, y: y + 92, fontSize: 58, weight: 950, fill: color, maxChars: 2, maxLines: 1, anchor: "middle" })}
+    ${textBlock({ text: label.toUpperCase(), x: x + 103, y: y + 50, fontSize: 23, weight: 950, fill: "#FFFFFF", maxChars: 18, maxLines: 1 })}
+    ${textBlock({ text: value, x: x + 205, y: y + 113, fontSize: 56, weight: 950, fill: "#FFFFFF", maxChars: 12, maxLines: 1, anchor: "middle" })}
   `;
 }
 
-function buildSlides(sourceInput = {}) {
-  const p = normalizeSource(sourceInput);
-  const outputLines = splitOutputLines(p.outputExcerpt || p.rawOutput, 10);
-  const proofLines = outputLines.length ? outputLines : [p.outputExcerpt];
-  const faceNote = p.shockFaceUrl ? "" : "Add AITL Shock Face Image to unlock real face hook.";
-  const caption = p.caption || `${p.toolName} proof-tested by AI Tool Logbook. Real API output captured. Metrics: ${p.metric1Label}: ${p.metric1Value}; ${p.metric2Label}: ${p.metric2Value}; ${p.metric3Label}: ${p.metric3Value}.`;
+async function buildSlides(source) {
+  const outputLines = splitOutputLines(source.outputExcerpt || source.rawOutput, 8);
+  const reactionData = await imageToDataUri(source.reactionImageUrl);
+  const faceSvg = reactionData
+    ? `<image href="${reactionData}" x="-170" y="165" width="650" height="1180" preserveAspectRatio="xMidYMid slice" opacity="1"/>
+       <rect x="0" y="0" width="470" height="1920" fill="url(#bg)" opacity="0.05"/>`
+    : `<rect x="0" y="210" width="430" height="990" rx="40" fill="#06121F" stroke="#38BDF8" stroke-width="4"/>
+       ${textBlock({ text: "REACTION IMAGE", x: 215, y: 650, fontSize: 42, weight: 950, fill: "#38BDF8", maxChars: 16, maxLines: 2, anchor: "middle" })}`;
 
   const slides = [];
 
-  slides.push(`${aiBg({ slideIndex: 1, label: "REAL AI TEST" })}
-    <rect x="64" y="220" width="952" height="1430" rx="48" fill="rgba(2,6,23,0.52)" stroke="#1D4ED8" stroke-width="4" filter="url(#shadow)"/>
-    ${textBlock({ text: "I TESTED", x: 96, y: 380, fontSize: 74, weight: 950, fill: "#38BDF8", maxChars: 12, maxLines: 1, letterSpacing: 2 })}
-    ${textBlock({ text: hardLimitText(p.toolName, 32), x: 96, y: 520, fontSize: 86, weight: 950, fill: "#FFFFFF", maxChars: 13, maxLines: 3, lineHeight: 1.0 })}
-    <rect x="96" y="760" width="520" height="10" rx="5" fill="url(#brand)"/>
-    ${textBlock({ text: "NOT A HOMEPAGE REVIEW.", x: 96, y: 900, fontSize: 50, weight: 950, fill: "#FFFFFF", maxChars: 22, maxLines: 1 })}
-    ${textBlock({ text: "REAL PROMPT IN. REAL OUTPUT OUT.", x: 96, y: 978, fontSize: 46, weight: 950, fill: "#E5E7EB", maxChars: 24, maxLines: 2, lineHeight: 1.05 })}
-    <rect x="605" y="236" width="420" height="420" rx="210" fill="#0F172A" stroke="#38BDF8" stroke-width="6"/>
-    ${textBlock({ text: faceNote, x: 640, y: 700, fontSize: 26, weight: 900, fill: "#FCA5A5", maxChars: 25, maxLines: 2 })}
-    ${metricCard({ x: 96, y: 1295, label: p.metric1Label, value: p.metric1Value, color: "#38BDF8" })}
-    ${metricCard({ x: 390, y: 1295, label: p.metric2Label, value: p.metric2Value, color: "#22C55E" })}
-    ${metricCard({ x: 684, y: 1295, label: p.metric3Label, value: p.metric3Value, color: "#A78BFA" })}
-    ${textBlock({ text: hardLimitText(p.viewerProblem, 100), x: 96, y: 1570, fontSize: 36, weight: 850, fill: "#CBD5E1", maxChars: 32, maxLines: 2 })}
+  slides.push(`${baseSvg(1, "REAL API TEST")}
+    ${faceSvg}
+    ${textBlock({ text: "I TESTED", x: 458, y: 432, fontSize: 112, weight: 950, fill: "#FFFFFF", maxChars: 9, maxLines: 1 })}
+    ${textBlock({ text: hardLimitText(source.toolName, 26), x: 458, y: 560, fontSize: 78, weight: 950, fill: "#38BDF8", maxChars: 15, maxLines: 2, lineHeight: 1.0 })}
+    ${textBlock({ text: "Not a homepage review.", x: 520, y: 828, fontSize: 32, weight: 900, fill: "#FFFFFF", maxChars: 24, maxLines: 1 })}
+    ${textBlock({ text: "Real prompt in. Real output out.", x: 520, y: 872, fontSize: 34, weight: 950, fill: "#22D3EE", maxChars: 31, maxLines: 1 })}
+    <rect x="430" y="930" width="590" height="430" rx="30" fill="#020617" stroke="#38BDF8" stroke-width="4" filter="url(#shadow)"/>
+    <rect x="430" y="930" width="590" height="60" rx="30" fill="#0F172A"/>
+    ${textBlock({ text: "OpenAI API", x: 930, y: 972, fontSize: 24, weight: 950, fill: "#FFFFFF", maxChars: 16, maxLines: 1, anchor: "end" })}
+    ${textBlock({ text: "PROMPT", x: 466, y: 1045, fontSize: 28, weight: 950, fill: "#22D3EE", maxChars: 10, maxLines: 1 })}
+    ${textBlock({ text: hardLimitText(source.proofPrompt, 74), x: 466, y: 1090, fontSize: 27, weight: 800, fill: "#E5E7EB", maxChars: 32, maxLines: 3, family: "Courier New, monospace" })}
+    ${textBlock({ text: "RESULT", x: 466, y: 1230, fontSize: 28, weight: 950, fill: "#84CC16", maxChars: 10, maxLines: 1 })}
+    ${textBlock({ text: hardLimitText(outputLines[0] || source.outputExcerpt, 95), x: 466, y: 1275, fontSize: 25, weight: 850, fill: "#A3E635", maxChars: 34, maxLines: 3, family: "Courier New, monospace" })}
+    ${metricCard({ x: 42, y: 1482, label: source.metric1Label, value: source.metric1Value, color: "#38BDF8", icon: "◷" })}
+    ${metricCard({ x: 380, y: 1482, label: source.metric2Label, value: source.metric2Value.replace(" chars",""), color: "#D946EF", icon: "▣" })}
+    ${metricCard({ x: 718, y: 1482, label: source.metric3Label, value: source.metric3Value, color: "#FACC15", icon: "☆" })}
   ${closeSvg()}`);
 
-  slides.push(`${aiBg({ slideIndex: 2, label: "THE SETUP" })}
-    ${browserFrame({ title: "The messy input before the test", url: "source-input.txt" })}
-    ${textBlock({ text: "THIS WAS THE INPUT", x: 110, y: 340, fontSize: 64, weight: 950, fill: "#FFFFFF", maxChars: 18, maxLines: 2 })}
-    <rect x="110" y="450" width="860" height="760" rx="36" fill="#020617" stroke="#334155" stroke-width="4"/>
-    ${textBlock({ text: hardLimitText(p.messyInput, 520), x: 150, y: 535, fontSize: 34, weight: 800, fill: "#E5E7EB", maxChars: 39, maxLines: 13, lineHeight: 1.14 })}
-    <rect x="110" y="1290" width="860" height="210" rx="34" fill="#082F49" stroke="#38BDF8" stroke-width="4"/>
-    ${textBlock({ text: "THE TEST: Can it turn this into something usable?", x: 150, y: 1380, fontSize: 44, weight: 950, fill: "#FFFFFF", maxChars: 29, maxLines: 2 })}
+  slides.push(`${baseSvg(2, "PROMPT RECEIPT")}
+    ${textBlock({ text: "THE EXACT TEST", x: 90, y: 360, fontSize: 82, weight: 950, fill: "#FFFFFF", maxChars: 18, maxLines: 1 })}
+    <rect x="70" y="450" width="940" height="910" rx="36" fill="#020617" stroke="#38BDF8" stroke-width="4" filter="url(#shadow)"/>
+    ${textBlock({ text: hardLimitText(source.proofPrompt, 750), x: 115, y: 555, fontSize: 38, weight: 850, fill: "#E5E7EB", maxChars: 39, maxLines: 17, lineHeight: 1.12, family: "Courier New, monospace" })}
+    <rect x="90" y="1450" width="900" height="150" rx="36" fill="#092132" stroke="#38BDF8" stroke-width="3"/>
+    ${textBlock({ text: "No vibes. This is the actual prompt path.", x: 540, y: 1545, fontSize: 44, weight: 950, fill: "#22D3EE", maxChars: 34, maxLines: 1, anchor: "middle" })}
   ${closeSvg()}`);
 
-  slides.push(`${aiBg({ slideIndex: 3, label: "PROMPT RUN" })}
-    ${browserFrame({ title: "The exact prompt that ran", url: "POST /v1/chat/completions" })}
-    ${terminalBox({ x: 110, y: 300, w: 860, h: 600, lines: [
-      "$ POST /v1/chat/completions",
-      `> model: ${p.runner}`,
-      "> input: messy framework",
-      "> task: build usable system",
-      "> status: running...",
-      "> output: captured"
-    ] })}
-    <rect x="110" y="980" width="860" height="430" rx="36" fill="#020617" stroke="#2563EB" stroke-width="4"/>
-    ${textBlock({ text: hardLimitText(p.prompt, 270), x: 150, y: 1070, fontSize: 34, weight: 820, fill: "#E5E7EB", maxChars: 38, maxLines: 8, lineHeight: 1.12 })}
-    ${metricCard({ x: 110, y: 1500, label: p.metric1Label, value: p.metric1Value, color: "#38BDF8" })}
+  slides.push(`${baseSvg(3, "LIVE OUTPUT")}
+    ${textBlock({ text: "WHAT IT GAVE ME", x: 90, y: 350, fontSize: 78, weight: 950, fill: "#FFFFFF", maxChars: 17, maxLines: 1 })}
+    <rect x="70" y="440" width="940" height="980" rx="36" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="3"/>
+    ${outputLines.slice(0, 7).map((line, i) => `
+      <rect x="110" y="${520 + i * 110}" width="860" height="82" rx="20" fill="${i === 1 ? "#DCFCE7" : i % 2 ? "#EEF2FF" : "#FFFFFF"}" stroke="${i === 1 ? "#22C55E" : "#E2E8F0"}" stroke-width="3"/>
+      ${textBlock({ text: hardLimitText(line, 74), x: 145, y: 575 + i * 110, fontSize: 29, weight: i === 1 ? 950 : 830, fill: "#020617", maxChars: 39, maxLines: 1 })}
+    `).join("\n")}
+    <rect x="110" y="1490" width="860" height="128" rx="34" fill="#052E16" stroke="#22C55E" stroke-width="5"/>
+    ${textBlock({ text: "ACTUAL OUTPUT. NOT A TOOL LIST.", x: 540, y: 1570, fontSize: 42, weight: 950, fill: "#86EFAC", maxChars: 31, maxLines: 1, anchor: "middle" })}
   ${closeSvg()}`);
 
-  slides.push(`${aiBg({ slideIndex: 4, label: "OUTPUT RECEIPT" })}
-    ${browserFrame({ title: "Actual generated output", url: "response-output.json" })}
-    ${textBlock({ text: "HERE IS WHAT CAME BACK", x: 110, y: 320, fontSize: 58, weight: 950, fill: "#FFFFFF", maxChars: 22, maxLines: 2 })}
-    ${outputReceipt({ x: 110, y: 440, w: 860, h: 840, lines: proofLines, highlight: 1 })}
-    <rect x="110" y="1360" width="860" height="176" rx="34" fill="#052E16" stroke="#22C55E" stroke-width="4"/>
-    ${textBlock({ text: "This is the receipt. Not vibes.", x: 150, y: 1464, fontSize: 48, weight: 950, fill: "#86EFAC", maxChars: 28, maxLines: 1 })}
+  slides.push(`${baseSvg(4, "BIG NUMBERS")}
+    ${textBlock({ text: source.metric1Value, x: 540, y: 560, fontSize: 190, weight: 950, fill: "#A3E635", maxChars: 10, maxLines: 1, anchor: "middle" })}
+    ${textBlock({ text: source.metric1Label.toUpperCase(), x: 540, y: 650, fontSize: 40, weight: 950, fill: "#FFFFFF", maxChars: 24, maxLines: 1, anchor: "middle" })}
+    ${textBlock({ text: source.metric2Value, x: 540, y: 1040, fontSize: 150, weight: 950, fill: "#38BDF8", maxChars: 15, maxLines: 1, anchor: "middle" })}
+    ${textBlock({ text: source.metric2Label.toUpperCase(), x: 540, y: 1120, fontSize: 40, weight: 950, fill: "#FFFFFF", maxChars: 24, maxLines: 1, anchor: "middle" })}
+    ${textBlock({ text: source.metric3Value, x: 540, y: 1450, fontSize: 170, weight: 950, fill: "#D946EF", maxChars: 10, maxLines: 1, anchor: "middle" })}
+    ${textBlock({ text: source.metric3Label.toUpperCase(), x: 540, y: 1535, fontSize: 40, weight: 950, fill: "#FFFFFF", maxChars: 24, maxLines: 1, anchor: "middle" })}
   ${closeSvg()}`);
 
-  slides.push(`${aiBg({ slideIndex: 5, label: "BIG NUMBERS" })}
-    ${textBlock({ text: p.metric1Value, x: 540, y: 480, fontSize: 190, weight: 950, fill: "#38BDF8", maxChars: 10, maxLines: 1, anchor: "middle" })}
-    ${textBlock({ text: p.metric1Label.toUpperCase(), x: 540, y: 560, fontSize: 38, weight: 950, fill: "#CBD5E1", maxChars: 24, maxLines: 1, anchor: "middle", letterSpacing: 2 })}
-    <rect x="110" y="680" width="860" height="10" rx="5" fill="url(#brand)"/>
-    ${textBlock({ text: p.metric2Value, x: 540, y: 980, fontSize: 120, weight: 950, fill: "#FFFFFF", maxChars: 16, maxLines: 1, anchor: "middle" })}
-    ${textBlock({ text: p.metric2Label.toUpperCase(), x: 540, y: 1060, fontSize: 38, weight: 950, fill: "#CBD5E1", maxChars: 24, maxLines: 1, anchor: "middle", letterSpacing: 2 })}
-    ${textBlock({ text: p.metric3Value, x: 540, y: 1380, fontSize: 150, weight: 950, fill: "#A78BFA", maxChars: 10, maxLines: 1, anchor: "middle" })}
-    ${textBlock({ text: p.metric3Label.toUpperCase(), x: 540, y: 1460, fontSize: 38, weight: 950, fill: "#CBD5E1", maxChars: 24, maxLines: 1, anchor: "middle", letterSpacing: 2 })}
+  slides.push(`${baseSvg(5, "VERDICT")}
+    ${textBlock({ text: "WOULD I USE THIS?", x: 540, y: 390, fontSize: 84, weight: 950, fill: "#FFFFFF", maxChars: 22, maxLines: 1, anchor: "middle" })}
+    <rect x="90" y="510" width="900" height="520" rx="42" fill="#020617" stroke="#22C55E" stroke-width="6" filter="url(#shadow)"/>
+    ${textBlock({ text: hardLimitText(source.verdict, 310), x: 140, y: 620, fontSize: 48, weight: 900, fill: "#E5E7EB", maxChars: 31, maxLines: 7, lineHeight: 1.1 })}
+    <rect x="100" y="1180" width="880" height="180" rx="46" fill="#111827" stroke="#FACC15" stroke-width="5"/>
+    ${textBlock({ text: "YES — WITH A REAL FRAMEWORK", x: 540, y: 1292, fontSize: 54, weight: 950, fill: "#FACC15", maxChars: 28, maxLines: 1, anchor: "middle" })}
   ${closeSvg()}`);
 
-  slides.push(`${aiBg({ slideIndex: 6, label: "VERDICT" })}
-    ${browserFrame({ title: "Would I use this in production?", url: "final-verdict.md" })}
-    ${textBlock({ text: "WOULD I USE THIS?", x: 110, y: 360, fontSize: 68, weight: 950, fill: "#FFFFFF", maxChars: 18, maxLines: 2 })}
-    <rect x="110" y="500" width="860" height="500" rx="42" fill="#06121F" stroke="#38BDF8" stroke-width="4"/>
-    ${textBlock({ text: hardLimitText(p.verdict, 280), x: 155, y: 600, fontSize: 44, weight: 900, fill: "#E5E7EB", maxChars: 30, maxLines: 7, lineHeight: 1.08 })}
-    <rect x="160" y="1130" width="760" height="170" rx="42" fill="#052E16" stroke="#22C55E" stroke-width="6"/>
-    ${textBlock({ text: "WORTH TESTING", x: 540, y: 1238, fontSize: 58, weight: 950, fill: "#86EFAC", maxChars: 18, maxLines: 1, anchor: "middle", letterSpacing: 1 })}
+  slides.push(`${baseSvg(6, "SAVE THIS")}
+    ${textBlock({ text: "THE RULE", x: 540, y: 400, fontSize: 96, weight: 950, fill: "#38BDF8", maxChars: 10, maxLines: 1, anchor: "middle" })}
+    ${textBlock({ text: "AI tools are only interesting when the receipts are visible.", x: 100, y: 600, fontSize: 74, weight: 950, fill: "#FFFFFF", maxChars: 22, maxLines: 4, lineHeight: 1.04 })}
+    <rect x="100" y="1230" width="880" height="250" rx="42" fill="#020617" stroke="#D946EF" stroke-width="5"/>
+    ${textBlock({ text: "real input → real output → real verdict", x: 540, y: 1375, fontSize: 46, weight: 950, fill: "#F0ABFC", maxChars: 34, maxLines: 1, anchor: "middle" })}
   ${closeSvg()}`);
 
-  slides.push(`${aiBg({ slideIndex: 7, label: "NEXT TEST" })}
-    ${textBlock({ text: "THE LESSON", x: 90, y: 340, fontSize: 76, weight: 950, fill: "#38BDF8", maxChars: 14, maxLines: 1, letterSpacing: 2 })}
-    ${textBlock({ text: "AI tools are boring until you test them against a real workflow.", x: 90, y: 500, fontSize: 66, weight: 950, fill: "#FFFFFF", maxChars: 21, maxLines: 4, lineHeight: 1.02 })}
-    <rect x="90" y="980" width="850" height="270" rx="42" fill="#020617" stroke="#334155" stroke-width="4"/>
-    ${textBlock({ text: "Next test: another AI tool, same rule — real input, real output, real verdict.", x: 135, y: 1080, fontSize: 44, weight: 900, fill: "#E5E7EB", maxChars: 31, maxLines: 3 })}
-    <rect x="90" y="1390" width="620" height="110" rx="55" fill="#FFFFFF"/>
-    ${textBlock({ text: "SAVE THE RECEIPTS", x: 400, y: 1460, fontSize: 38, weight: 950, fill: "#020617", maxChars: 24, maxLines: 1, anchor: "middle" })}
-    <rect x="735" y="1260" width="280" height="280" rx="140" fill="#0F172A" stroke="#38BDF8" stroke-width="5"/>
+  slides.push(`${baseSvg(7, "NEXT TEST")}
+    ${textBlock({ text: "WHICH AI TOOL NEXT?", x: 540, y: 520, fontSize: 82, weight: 950, fill: "#FFFFFF", maxChars: 22, maxLines: 2, anchor: "middle" })}
+    <rect x="120" y="760" width="840" height="320" rx="42" fill="#020617" stroke="#38BDF8" stroke-width="5"/>
+    ${textBlock({ text: "Comment the tool. I will test it with a real workflow, not a homepage review.", x: 170, y: 880, fontSize: 52, weight: 900, fill: "#E5E7EB", maxChars: 28, maxLines: 4, lineHeight: 1.08 })}
+    <rect x="170" y="1240" width="740" height="140" rx="70" fill="#FFFFFF"/>
+    ${textBlock({ text: "FULL RECEIPTS LINKED", x: 540, y: 1332, fontSize: 48, weight: 950, fill: "#020617", maxChars: 24, maxLines: 1, anchor: "middle" })}
   ${closeSvg()}`);
 
-  return { slides, caption };
+  return slides;
+}
+
+async function svgToPngBuffer(svg) {
+  return sharp(Buffer.from(svg)).png().toBuffer();
 }
 
 function getR2ObjectKey(recordId) {
@@ -467,154 +321,151 @@ async function r2ObjectExists(recordId) {
 
 async function fetchAirtableRecord(recordId) {
   if (!AIRTABLE_TOKEN) throw new Error("Server missing AIRTABLE_PERSONAL_ACCESS_TOKEN");
-  const response = await fetch(`${AIRTABLE_TABLE_URL}/${recordId}`, { method: "GET", headers: { Authorization: `Bearer ${AIRTABLE_TOKEN}`, "Content-Type": "application/json" } });
-  const responseText = await response.text();
-  let data;
-  try { data = responseText ? JSON.parse(responseText) : {}; } catch { data = { raw: responseText }; }
-  if (!response.ok) throw new Error(`Airtable fetch failed: ${response.status} ${JSON.stringify(data)}`);
+  const response = await fetch(`${AIRTABLE_TABLE_URL}/${recordId}`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${AIRTABLE_TOKEN}`, "Content-Type": "application/json" }
+  });
+  const text = await response.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+  if (!response.ok) throw new Error(`Airtable fetch failed: ${response.status} ${JSON.stringify(data).slice(0, 400)}`);
   return data;
 }
 
-async function svgToPngBuffer(svg) {
-  return sharp(Buffer.from(svg)).png({ quality: 100, compressionLevel: 9 }).toBuffer();
+async function uploadToR2(recordId, mp4Buffer) {
+  if (!r2Client) throw new Error("R2 is not configured");
+  await r2Client.send(new PutObjectCommand({
+    Bucket: R2_BUCKET,
+    Key: getR2ObjectKey(recordId),
+    Body: mp4Buffer,
+    ContentType: "video/mp4",
+    CacheControl: "public, max-age=31536000, immutable"
+  }));
+  return getR2PublicUrl(recordId);
 }
 
 function runFfmpeg(args) {
   return new Promise((resolve, reject) => {
-    if (!ffmpegPath) return reject(new Error("ffmpeg-static path is missing."));
     const child = spawn(ffmpegPath, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
-    let stdout = "";
-    child.stdout.on("data", (data) => { stdout += data.toString(); });
-    child.stderr.on("data", (data) => { stderr += data.toString(); });
-    child.on("error", reject);
-    child.on("close", (code) => { code === 0 ? resolve({ stdout, stderr }) : reject(new Error(`FFmpeg failed with code ${code}: ${stderr}`)); });
+    child.stderr.on("data", (d) => { stderr += d.toString(); });
+    child.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg failed with code ${code}: ${stderr.slice(-1200)}`));
+    });
   });
 }
 
 async function renderMp4ForRecord(recordId) {
   const record = await fetchAirtableRecord(recordId);
-  const source = sourceFromAirtableFields(record.fields || {});
-  const { slides } = buildSlides(source);
+  const source = normalizeSource(record.fields || {});
+  const keyCover = await keyArtCover(source.keyArtUrl);
+  const slides = await buildSlides(source);
 
-  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `aitl-proof-footage-v1-${recordId}-`));
+  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `aitl-proof-footage-v2-${recordId}-`));
   const outputPath = path.join(workDir, "video.mp4");
   const listPath = path.join(workDir, "slides.txt");
   const slidePaths = [];
 
-  for (let index = 0; index < slides.length; index++) {
-    let pngBuffer = await svgToPngBuffer(slides[index]);
-    pngBuffer = await compositeShockFace(pngBuffer, source, index);
-    const slidePath = path.join(workDir, `slide_${String(index + 1).padStart(3, "0")}.png`);
-    await fs.writeFile(slidePath, pngBuffer);
-    slidePaths.push(slidePath);
+  try {
+    for (let index = 0; index < slides.length; index++) {
+      let pngBuffer = index === 0 && keyCover ? keyCover : await svgToPngBuffer(slides[index]);
+      const slidePath = path.join(workDir, `slide_${String(index + 1).padStart(3, "0")}.png`);
+      await fs.writeFile(slidePath, pngBuffer);
+      slidePaths.push(slidePath);
+    }
+
+    const durations = [1.8, 3.2, 4.2, 3.2, 3.5, 3.2, 3.2];
+    let concatText = "";
+    for (let i = 0; i < slidePaths.length; i++) {
+      concatText += `file '${slidePaths[i].replace(/'/g, "'\\''")}'\n`;
+      concatText += `duration ${durations[i] || 3}\n`;
+    }
+    concatText += `file '${slidePaths[slidePaths.length - 1].replace(/'/g, "'\\''")}'\n`;
+    await fs.writeFile(listPath, concatText);
+
+    await runFfmpeg([
+      "-y",
+      "-f", "concat",
+      "-safe", "0",
+      "-i", listPath,
+      "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+      "-r", "30",
+      "-c:v", "libx264",
+      "-preset", "veryfast",
+      "-crf", "24",
+      "-movflags", "+faststart",
+      outputPath
+    ]);
+
+    const buffer = await fs.readFile(outputPath);
+    const videoUrl = await uploadToR2(recordId, buffer);
+    return { ok: true, recordId, status: "ready", videoUrl, storage: "r2" };
+  } finally {
+    await fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
   }
-
-  let concatText = "";
-  for (let index = 0; index < slidePaths.length; index++) {
-    const duration = index === slidePaths.length - 1 ? 3.8 : 3.0;
-    concatText += `file '${slidePaths[index].replaceAll("'", "'\\''")}'\n`;
-    concatText += `duration ${duration}\n`;
-  }
-  concatText += `file '${slidePaths[slidePaths.length - 1].replaceAll("'", "'\\''")}'\n`;
-  await fs.writeFile(listPath, concatText, "utf8");
-
-  await runFfmpeg([
-    "-y",
-    "-f", "concat",
-    "-safe", "0",
-    "-i", listPath,
-    "-vf", `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=decrease,pad=${WIDTH}:${HEIGHT}:(ow-iw)/2:(oh-ih)/2,format=yuv420p`,
-    "-r", "30",
-    "-c:v", "libx264",
-    "-preset", "ultrafast",
-    "-crf", "24",
-    "-movflags", "+faststart",
-    outputPath
-  ]);
-
-  return { workDir, outputPath };
 }
 
-async function uploadMp4ToR2(recordId, filePath) {
-  if (!r2Client) throw new Error("R2 client not configured.");
-  if (!R2_PUBLIC_BASE_URL) throw new Error("Missing R2_PUBLIC_BASE_URL.");
-  const fileBuffer = await fs.readFile(filePath);
-  await r2Client.send(new PutObjectCommand({ Bucket: R2_BUCKET, Key: getR2ObjectKey(recordId), Body: fileBuffer, ContentType: "video/mp4", CacheControl: "public, max-age=60" }));
-  return getR2PublicUrl(recordId);
-}
-
-async function safeCleanup(dirPath) {
-  if (!dirPath || !dirPath.includes("aitl-proof-footage-v1-")) return;
-  try { await fs.rm(dirPath, { recursive: true, force: true }); } catch (error) { console.error("Cleanup failed:", error); }
-}
-
-function enqueueBackgroundMp4Render(recordId) {
-  const existingJob = renderJobs.get(recordId);
-  if (existingJob?.status === "queued" || existingJob?.status === "rendering") return existingJob;
-  const job = { recordId, status: "queued", startedAt: new Date().toISOString(), videoUrl: getR2PublicUrl(recordId), error: "" };
-  renderJobs.set(recordId, job);
-  renderQueue.push(recordId);
-  setImmediate(processRenderQueue);
+function enqueueRender(recordId) {
+  const existing = renderQueue.find((j) => j.recordId === recordId && ["queued", "rendering"].includes(j.status));
+  if (existing) return existing;
+  const job = { recordId, status: "queued", createdAt: new Date().toISOString(), result: null, error: null };
+  renderQueue.push(job);
+  processQueue();
   return job;
 }
 
-async function processRenderQueue() {
+async function processQueue() {
   if (queueRunning) return;
   queueRunning = true;
-  while (renderQueue.length > 0) {
-    const recordId = renderQueue.shift();
-    const job = renderJobs.get(recordId);
-    if (!job) continue;
-    renderJobs.set(recordId, { ...job, status: "rendering", renderStartedAt: new Date().toISOString() });
-    let workDir;
-    try {
-      const rendered = await renderMp4ForRecord(recordId);
-      workDir = rendered.workDir;
-      const videoUrl = await uploadMp4ToR2(recordId, rendered.outputPath);
-      await safeCleanup(workDir);
-      renderJobs.set(recordId, { recordId, status: "ready", startedAt: job.startedAt, finishedAt: new Date().toISOString(), videoUrl, error: "" });
-      console.log(`Proof Footage MP4 uploaded to R2 for ${recordId}: ${videoUrl}`);
-    } catch (error) {
-      if (workDir) await safeCleanup(workDir);
-      renderJobs.set(recordId, { recordId, status: "failed", startedAt: job.startedAt, finishedAt: new Date().toISOString(), videoUrl: getR2PublicUrl(recordId), error: error?.message || String(error) });
-      console.error(`Proof Footage background MP4 render failed for ${recordId}:`, error);
+  try {
+    while (renderQueue.length) {
+      const job = renderQueue[0];
+      job.status = "rendering";
+      try {
+        job.result = await renderMp4ForRecord(job.recordId);
+        job.status = "ready";
+      } catch (error) {
+        job.status = "failed";
+        job.error = error?.message || String(error);
+      }
+      renderQueue.shift();
     }
+  } finally {
+    queueRunning = false;
   }
-  queueRunning = false;
+}
+
+function requireServerAuth(req, res, next) {
+  const key = req.headers["x-render-key"] || req.query.key || req.body?.key;
+  if (key !== SERVER_RENDER_KEY) return res.status(401).json({ ok: false, error: "Unauthorized" });
+  next();
+}
+
+function requireImageAccess(req, res, next) {
+  const key = req.query.key;
+  if (key !== IMAGE_ACCESS_KEY) return res.status(401).json({ ok: false, error: "Unauthorized" });
+  next();
 }
 
 app.get("/health", (req, res) => {
   res.json({
     ok: true,
-    service: "AI Tool Logbook Proof Footage Renderer",
+    service: "AI Tool Logbook Scrollstop Proof Renderer",
     storage: "r2",
     r2Configured: Boolean(r2Client && R2_PUBLIC_BASE_URL && R2_BUCKET),
     bucket: R2_BUCKET,
     cloudinary: false,
-    layout: "proof-footage-v1-shock-face",
-    video: "ffmpeg-r2-proof-footage-v1",
+    layout: "proof-footage-v2-scrollstop",
+    video: "ffmpeg-r2-proof-footage-v2",
     dimensions: `${WIDTH}x${HEIGHT}`,
     r2KeyPrefix: R2_PREFIX,
-    renderMode: "proof-footage-single-ffmpeg-pass",
+    renderMode: "proof-footage-v2-keyart-single-ffmpeg-pass",
     queueRunning,
     queuedJobs: renderQueue.length,
     ffmpegPath: Boolean(ffmpegPath),
     timestamp: new Date().toISOString()
   });
-});
-
-app.post("/render/aitl-carousel", requireServerAuth, async (req, res) => {
-  try {
-    const recordId = cleanText(req.body?.recordId);
-    if (!recordId) return res.status(400).json({ ok: false, error: "Missing recordId" });
-    const baseUrl = getPublicBaseUrl(req);
-    const { caption } = buildSlides(req.body?.source || {});
-    const slideUrls = [1, 2, 3, 4, 5, 6, 7].map((slideNumber) => `${baseUrl}/slides/${recordId}/${slideNumber}.png?key=${encodeURIComponent(IMAGE_ACCESS_KEY)}`);
-    return res.json({ ok: true, renderId: `aitl_proof_${recordId}`, style: "AI Tool Logbook Proof Footage V1", slideUrls, caption, notes: "Generated 7 vertical proof-evidence PNG slide URLs. Uses real proof fields." });
-  } catch (error) {
-    return res.status(500).json({ ok: false, error: "Proof evidence URL generation failed", message: error?.message || String(error) });
-  }
 });
 
 app.post("/render/aitl-carousel-video", requireServerAuth, async (req, res) => {
@@ -623,39 +474,38 @@ app.post("/render/aitl-carousel-video", requireServerAuth, async (req, res) => {
     if (!recordId) return res.status(400).json({ ok: false, error: "Missing recordId" });
     const exists = await r2ObjectExists(recordId);
     const videoUrl = getR2PublicUrl(recordId);
-    if (exists && req.body?.force !== true) return res.json({ ok: true, renderId: `aitl_proof_video_${recordId}`, status: "ready", videoUrl, storage: "r2", notes: "Proof Footage MP4 already exists in R2. Send force=true to regenerate." });
-    const job = enqueueBackgroundMp4Render(recordId);
-    return res.status(202).json({ ok: true, renderId: `aitl_proof_video_${recordId}`, status: job.status, videoUrl, storage: "r2", notes: "Proof Footage MP4 render queued. Check status endpoint or open R2 URL after render completes." });
+    if (exists && req.body?.force !== true) return res.json({ ok: true, renderId: `aitl_scrollstop_proof_${recordId}`, status: "ready", videoUrl, storage: "r2" });
+    const job = enqueueRender(recordId);
+    return res.status(202).json({ ok: true, renderId: `aitl_scrollstop_proof_${recordId}`, status: job.status, videoUrl, storage: "r2", notes: "Proof Footage V2 Scrollstop render queued." });
   } catch (error) {
-    return res.status(500).json({ ok: false, error: "Proof evidence video render trigger failed", message: error?.message || String(error) });
+    return res.status(500).json({ ok: false, error: "Render trigger failed", message: error?.message || String(error) });
   }
 });
 
 app.get("/render/aitl-carousel-video/status/:recordId", async (req, res) => {
-  try {
-    const recordId = req.params.recordId;
-    const videoUrl = getR2PublicUrl(recordId);
-    const job = renderJobs.get(recordId);
-    if (job?.status === "queued" || job?.status === "rendering" || job?.status === "failed") return res.json({ ok: true, recordId, status: job.status, videoUrl, error: job.error || "" });
-    const exists = await r2ObjectExists(recordId);
-    if (exists) return res.json({ ok: true, recordId, status: "ready", videoUrl });
-    if (job?.status === "ready") return res.json({ ok: true, recordId, status: "ready", videoUrl: job.videoUrl || videoUrl });
-    return res.json({ ok: true, recordId, status: "missing", videoUrl });
-  } catch (error) {
-    return res.status(500).json({ ok: false, error: "Status check failed", message: error?.message || String(error) });
-  }
+  const recordId = cleanText(req.params.recordId);
+  const videoUrl = getR2PublicUrl(recordId);
+  const queued = renderQueue.find((j) => j.recordId === recordId);
+  if (queued) return res.json({ ok: true, recordId, status: queued.status, videoUrl, error: queued.error });
+  const exists = await r2ObjectExists(recordId);
+  return res.json({ ok: true, recordId, status: exists ? "ready" : "missing", videoUrl });
 });
 
 app.get("/slides/:recordId/:slideNumber.png", requireImageAccess, async (req, res) => {
   try {
-    const recordId = req.params.recordId;
+    const recordId = cleanText(req.params.recordId);
     const slideNumber = Number(req.params.slideNumber);
     if (!recordId || !Number.isInteger(slideNumber) || slideNumber < 1 || slideNumber > 7) return res.status(400).json({ ok: false, error: "Invalid slide URL" });
     const record = await fetchAirtableRecord(recordId);
-    const source = sourceFromAirtableFields(record.fields || {});
-    const { slides } = buildSlides(source);
-    let pngBuffer = await svgToPngBuffer(slides[slideNumber - 1]);
-    pngBuffer = await compositeShockFace(pngBuffer, source, slideNumber - 1);
+    const source = normalizeSource(record.fields || {});
+    const keyCover = await keyArtCover(source.keyArtUrl);
+    if (slideNumber === 1 && keyCover) {
+      res.setHeader("Content-Type", "image/png");
+      res.setHeader("Cache-Control", "no-store");
+      return res.send(keyCover);
+    }
+    const slides = await buildSlides(source);
+    const pngBuffer = await svgToPngBuffer(slides[slideNumber - 1]);
     res.setHeader("Content-Type", "image/png");
     res.setHeader("Cache-Control", "no-store");
     return res.send(pngBuffer);
@@ -665,5 +515,5 @@ app.get("/slides/:recordId/:slideNumber.png", requireImageAccess, async (req, re
 });
 
 app.listen(PORT, () => {
-  console.log(`AI Tool Logbook Proof Footage Renderer running on port ${PORT}`);
+  console.log(`AI Tool Logbook Scrollstop Proof Renderer running on port ${PORT}`);
 });
