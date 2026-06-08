@@ -7,6 +7,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import { spawn } from "child_process";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
 dotenv.config();
 
@@ -17,10 +18,17 @@ app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
 const PORT = process.env.PORT || 3000;
+
 const RENDER_KEY = process.env.AITL_RENDERER_KEY;
 const IMAGE_ACCESS_KEY = process.env.AITL_IMAGE_ACCESS_KEY || RENDER_KEY;
 const VIDEO_ACCESS_KEY = process.env.AITL_VIDEO_ACCESS_KEY || IMAGE_ACCESS_KEY || RENDER_KEY;
 const AIRTABLE_TOKEN = process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN;
+
+const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
+const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
+const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
+const R2_BUCKET = process.env.R2_BUCKET || "aitl-renders";
+const R2_PUBLIC_BASE_URL = process.env.R2_PUBLIC_BASE_URL;
 
 const AIRTABLE_BASE_ID = "app47YuxOKMw8vkCj";
 const AIRTABLE_TABLE_NAME = "AI Tool Radar";
@@ -28,6 +36,18 @@ const AIRTABLE_TABLE_URL = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${en
 
 const WIDTH = 1080;
 const HEIGHT = 1350;
+
+const r2Client =
+  R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY
+    ? new S3Client({
+        region: "auto",
+        endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+        credentials: {
+          accessKeyId: R2_ACCESS_KEY_ID,
+          secretAccessKey: R2_SECRET_ACCESS_KEY
+        }
+      })
+    : null;
 
 const DEFAULT_COPY = {
   hookA: "I thought Facebook was dead.",
@@ -91,19 +111,6 @@ function requireImageAccess(req, res, next) {
   next();
 }
 
-function requireVideoAccess(req, res, next) {
-  const suppliedKey = req.query.key;
-
-  if (!VIDEO_ACCESS_KEY || suppliedKey !== VIDEO_ACCESS_KEY) {
-    return res.status(401).json({
-      ok: false,
-      error: "Unauthorized video request"
-    });
-  }
-
-  next();
-}
-
 function cleanText(value, fallback = "") {
   if (Array.isArray(value)) return value.filter(Boolean).join("\n");
   if (typeof value === "number") return String(value);
@@ -140,9 +147,7 @@ function escapeXml(value) {
 
 function hardLimitText(value, maxChars) {
   const text = cleanText(value).replace(/\s+/g, " ").trim();
-
   if (text.length <= maxChars) return text;
-
   return `${text.slice(0, maxChars - 1).trim()}…`;
 }
 
@@ -163,7 +168,6 @@ function wrapLine(line, maxChars) {
   }
 
   if (current) lines.push(current);
-
   return lines.length ? lines : [""];
 }
 
@@ -588,10 +592,7 @@ function buildSlides(sourceInput = {}) {
     copy.caption ||
     `${copy.hookA} ${copy.hookB}\n\nUse AI tools to test assumptions, sharpen positioning, and turn vague ideas into repeatable formats.\n\nSave this if you’re building with AI tools.`;
 
-  return {
-    slides,
-    caption
-  };
+  return { slides, caption };
 }
 
 function sourceFromAirtableFields(fields = {}) {
@@ -648,10 +649,7 @@ async function fetchAirtableRecord(recordId) {
 
 async function svgToPngBuffer(svg) {
   return sharp(Buffer.from(svg))
-    .png({
-      quality: 100,
-      compressionLevel: 9
-    })
+    .png({ quality: 100, compressionLevel: 9 })
     .toBuffer();
 }
 
@@ -680,11 +678,8 @@ function runFfmpeg(args) {
     child.on("error", reject);
 
     child.on("close", (code) => {
-      if (code === 0) {
-        resolve({ stdout, stderr });
-      } else {
-        reject(new Error(`FFmpeg failed with code ${code}: ${stderr}`));
-      }
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(`FFmpeg failed with code ${code}: ${stderr}`));
     });
   });
 }
@@ -742,10 +737,32 @@ async function renderMp4ForRecord(recordId) {
     outputPath
   ]);
 
-  return {
-    workDir,
-    outputPath
-  };
+  return { workDir, outputPath };
+}
+
+async function uploadMp4ToR2(recordId, filePath) {
+  if (!r2Client) {
+    throw new Error("R2 client not configured. Missing R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, or R2_SECRET_ACCESS_KEY.");
+  }
+
+  if (!R2_PUBLIC_BASE_URL) {
+    throw new Error("Missing R2_PUBLIC_BASE_URL.");
+  }
+
+  const objectKey = `aitl-carousel/${recordId}/carousel.mp4`;
+  const fileBuffer = await fs.readFile(filePath);
+
+  await r2Client.send(
+    new PutObjectCommand({
+      Bucket: R2_BUCKET,
+      Key: objectKey,
+      Body: fileBuffer,
+      ContentType: "video/mp4",
+      CacheControl: "public, max-age=31536000"
+    })
+  );
+
+  return `${R2_PUBLIC_BASE_URL.replace(/\/$/, "")}/${objectKey}`;
 }
 
 async function safeCleanup(dirPath) {
@@ -762,10 +779,12 @@ app.get("/health", (req, res) => {
   res.json({
     ok: true,
     service: "AI Tool Logbook Automated Carousel Renderer",
-    storage: "none",
+    storage: "r2",
+    r2Configured: Boolean(r2Client && R2_PUBLIC_BASE_URL && R2_BUCKET),
+    bucket: R2_BUCKET,
     cloudinary: false,
     layout: "safe-text-v2",
-    video: "ffmpeg-mp4-v1",
+    video: "ffmpeg-r2-mp4-v2",
     ffmpegPath: Boolean(ffmpegPath),
     timestamp: new Date().toISOString()
   });
@@ -776,10 +795,7 @@ app.post("/render/aitl-carousel", requireServerAuth, async (req, res) => {
     const recordId = cleanText(req.body?.recordId);
 
     if (!recordId) {
-      return res.status(400).json({
-        ok: false,
-        error: "Missing recordId"
-      });
+      return res.status(400).json({ ok: false, error: "Missing recordId" });
     }
 
     const baseUrl = getPublicBaseUrl(req);
@@ -807,33 +823,41 @@ app.post("/render/aitl-carousel", requireServerAuth, async (req, res) => {
 });
 
 app.post("/render/aitl-carousel-video", requireServerAuth, async (req, res) => {
+  let workDir;
+
   try {
     const recordId = cleanText(req.body?.recordId);
 
     if (!recordId) {
-      return res.status(400).json({
-        ok: false,
-        error: "Missing recordId"
-      });
+      return res.status(400).json({ ok: false, error: "Missing recordId" });
     }
 
+    const rendered = await renderMp4ForRecord(recordId);
+    workDir = rendered.workDir;
+
+    const videoUrl = await uploadMp4ToR2(recordId, rendered.outputPath);
     const baseUrl = getPublicBaseUrl(req);
+
+    await safeCleanup(workDir);
 
     return res.json({
       ok: true,
       renderId: `aitl_video_${recordId}`,
-      videoUrl: `${baseUrl}/videos/${recordId}/carousel.mp4?key=${encodeURIComponent(VIDEO_ACCESS_KEY)}`,
+      videoUrl,
       thumbnailUrl: `${baseUrl}/slides/${recordId}/1.png?key=${encodeURIComponent(IMAGE_ACCESS_KEY)}`,
       format: "mp4",
+      storage: "r2",
       width: WIDTH,
       height: HEIGHT,
       durationSeconds: 20,
-      notes: "Generated playable MP4 URL from 7 live carousel slides using server-side FFmpeg."
+      notes: "Generated MP4, uploaded to Cloudflare R2, and returned permanent playable video URL."
     });
   } catch (error) {
+    if (workDir) await safeCleanup(workDir);
+
     return res.status(500).json({
       ok: false,
-      error: "Video URL generation failed",
+      error: "Video render/upload failed",
       message: error?.message || String(error)
     });
   }
@@ -845,10 +869,7 @@ app.get("/slides/:recordId/:slideNumber.png", requireImageAccess, async (req, re
     const slideNumber = Number(req.params.slideNumber);
 
     if (!recordId || !Number.isInteger(slideNumber) || slideNumber < 1 || slideNumber > 7) {
-      return res.status(400).json({
-        ok: false,
-        error: "Invalid slide URL"
-      });
+      return res.status(400).json({ ok: false, error: "Invalid slide URL" });
     }
 
     const record = await fetchAirtableRecord(recordId);
@@ -865,41 +886,6 @@ app.get("/slides/:recordId/:slideNumber.png", requireImageAccess, async (req, re
     return res.status(500).json({
       ok: false,
       error: "Slide render failed",
-      message: error?.message || String(error)
-    });
-  }
-});
-
-app.get("/videos/:recordId/carousel.mp4", requireVideoAccess, async (req, res) => {
-  let workDir;
-
-  try {
-    const recordId = req.params.recordId;
-
-    if (!recordId) {
-      return res.status(400).json({
-        ok: false,
-        error: "Missing recordId"
-      });
-    }
-
-    const rendered = await renderMp4ForRecord(recordId);
-    workDir = rendered.workDir;
-
-    res.setHeader("Content-Type", "video/mp4");
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("Content-Disposition", `inline; filename="aitl-carousel-${recordId}.mp4"`);
-
-    res.on("finish", () => safeCleanup(workDir));
-    res.on("close", () => safeCleanup(workDir));
-
-    return res.sendFile(rendered.outputPath);
-  } catch (error) {
-    if (workDir) await safeCleanup(workDir);
-
-    return res.status(500).json({
-      ok: false,
-      error: "MP4 render failed",
       message: error?.message || String(error)
     });
   }
