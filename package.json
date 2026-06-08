@@ -1,13 +1,14 @@
 {
   "name": "aitl-carousel-renderer",
-  "version": "1.1.0",
-  "description": "AI Tool Logbook automated carousel PNG and MP4 renderer without external image storage",
+  "version": "1.2.0",
+  "description": "AI Tool Logbook automated PNG and MP4 carousel renderer with Cloudflare R2 storage",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.600.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
