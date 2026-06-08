@@ -255,7 +255,7 @@ function getPublicBaseUrl(req) {
 }
 
 function getR2ObjectKey(recordId) {
-  return `aitl-carousel/${recordId}/carousel.mp4`;
+  return `aitl-carousel-v4/${recordId}/carousel.mp4`;
 }
 
 function getR2PublicUrl(recordId) {
@@ -334,7 +334,7 @@ async function uploadMp4ToR2(recordId, filePath) {
   if (!r2Client) throw new Error("R2 client not configured.");
   if (!R2_PUBLIC_BASE_URL) throw new Error("Missing R2_PUBLIC_BASE_URL.");
   const fileBuffer = await fs.readFile(filePath);
-  await r2Client.send(new PutObjectCommand({ Bucket: R2_BUCKET, Key: getR2ObjectKey(recordId), Body: fileBuffer, ContentType: "video/mp4", CacheControl: "public, max-age=31536000" }));
+  await r2Client.send(new PutObjectCommand({ Bucket: R2_BUCKET, Key: getR2ObjectKey(recordId), Body: fileBuffer, ContentType: "video/mp4", CacheControl: "public, max-age=60" }));
   return getR2PublicUrl(recordId);
 }
 
@@ -387,8 +387,9 @@ app.get("/health", (req, res) => {
     bucket: R2_BUCKET,
     cloudinary: false,
     layout: "visual-proof-carousel-v4",
-    video: "ffmpeg-r2-v4-vertical-motion",
+    video: "ffmpeg-r2-v4-vertical-motion-versioned-r2",
     dimensions: `${WIDTH}x${HEIGHT}`,
+    r2KeyPrefix: "aitl-carousel-v4",
     queueRunning,
     queuedJobs: renderQueue.length,
     ffmpegPath: Boolean(ffmpegPath),
