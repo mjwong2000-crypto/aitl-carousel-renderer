@@ -1,7 +1,7 @@
 {
   "name": "aitl-carousel-renderer",
-  "version": "1.2.0",
-  "description": "AI Tool Logbook automated PNG and MP4 carousel renderer with Cloudflare R2 storage",
+  "version": "1.4.0",
+  "description": "AI Tool Logbook automated V4 PNG and MP4 carousel renderer with Cloudflare R2 storage",
   "main": "server.js",
   "type": "module",
   "scripts": {
