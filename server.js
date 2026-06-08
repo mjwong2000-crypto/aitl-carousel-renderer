@@ -7,7 +7,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import { spawn } from "child_process";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 
 dotenv.config();
 
@@ -21,7 +21,6 @@ const PORT = process.env.PORT || 3000;
 
 const RENDER_KEY = process.env.AITL_RENDERER_KEY;
 const IMAGE_ACCESS_KEY = process.env.AITL_IMAGE_ACCESS_KEY || RENDER_KEY;
-const VIDEO_ACCESS_KEY = process.env.AITL_VIDEO_ACCESS_KEY || IMAGE_ACCESS_KEY || RENDER_KEY;
 const AIRTABLE_TOKEN = process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN;
 
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
@@ -36,6 +35,8 @@ const AIRTABLE_TABLE_URL = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${en
 
 const WIDTH = 1080;
 const HEIGHT = 1350;
+
+const renderJobs = new Map();
 
 const r2Client =
   R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY
@@ -618,6 +619,31 @@ function getPublicBaseUrl(req) {
   return `${proto}://${req.get("host")}`;
 }
 
+function getR2ObjectKey(recordId) {
+  return `aitl-carousel/${recordId}/carousel.mp4`;
+}
+
+function getR2PublicUrl(recordId) {
+  return `${R2_PUBLIC_BASE_URL.replace(/\/$/, "")}/${getR2ObjectKey(recordId)}`;
+}
+
+async function r2ObjectExists(recordId) {
+  if (!r2Client) return false;
+
+  try {
+    await r2Client.send(
+      new HeadObjectCommand({
+        Bucket: R2_BUCKET,
+        Key: getR2ObjectKey(recordId)
+      })
+    );
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function fetchAirtableRecord(recordId) {
   if (!AIRTABLE_TOKEN) {
     throw new Error("Server missing AIRTABLE_PERSONAL_ACCESS_TOKEN");
@@ -742,27 +768,26 @@ async function renderMp4ForRecord(recordId) {
 
 async function uploadMp4ToR2(recordId, filePath) {
   if (!r2Client) {
-    throw new Error("R2 client not configured. Missing R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, or R2_SECRET_ACCESS_KEY.");
+    throw new Error("R2 client not configured.");
   }
 
   if (!R2_PUBLIC_BASE_URL) {
     throw new Error("Missing R2_PUBLIC_BASE_URL.");
   }
 
-  const objectKey = `aitl-carousel/${recordId}/carousel.mp4`;
   const fileBuffer = await fs.readFile(filePath);
 
   await r2Client.send(
     new PutObjectCommand({
       Bucket: R2_BUCKET,
-      Key: objectKey,
+      Key: getR2ObjectKey(recordId),
       Body: fileBuffer,
       ContentType: "video/mp4",
       CacheControl: "public, max-age=31536000"
     })
   );
 
-  return `${R2_PUBLIC_BASE_URL.replace(/\/$/, "")}/${objectKey}`;
+  return getR2PublicUrl(recordId);
 }
 
 async function safeCleanup(dirPath) {
@@ -775,6 +800,63 @@ async function safeCleanup(dirPath) {
   }
 }
 
+function startBackgroundMp4Render(recordId) {
+  const existingJob = renderJobs.get(recordId);
+
+  if (existingJob?.status === "rendering") {
+    return existingJob;
+  }
+
+  const job = {
+    recordId,
+    status: "rendering",
+    startedAt: new Date().toISOString(),
+    videoUrl: getR2PublicUrl(recordId),
+    error: ""
+  };
+
+  renderJobs.set(recordId, job);
+
+  setImmediate(async () => {
+    let workDir;
+
+    try {
+      const rendered = await renderMp4ForRecord(recordId);
+      workDir = rendered.workDir;
+
+      const videoUrl = await uploadMp4ToR2(recordId, rendered.outputPath);
+
+      await safeCleanup(workDir);
+
+      renderJobs.set(recordId, {
+        recordId,
+        status: "ready",
+        startedAt: job.startedAt,
+        finishedAt: new Date().toISOString(),
+        videoUrl,
+        error: ""
+      });
+
+      console.log(`MP4 uploaded to R2 for ${recordId}: ${videoUrl}`);
+    } catch (error) {
+      if (workDir) await safeCleanup(workDir);
+
+      renderJobs.set(recordId, {
+        recordId,
+        status: "failed",
+        startedAt: job.startedAt,
+        finishedAt: new Date().toISOString(),
+        videoUrl: getR2PublicUrl(recordId),
+        error: error?.message || String(error)
+      });
+
+      console.error(`Background MP4 render failed for ${recordId}:`, error);
+    }
+  });
+
+  return job;
+}
+
 app.get("/health", (req, res) => {
   res.json({
     ok: true,
@@ -784,7 +866,7 @@ app.get("/health", (req, res) => {
     bucket: R2_BUCKET,
     cloudinary: false,
     layout: "safe-text-v2",
-    video: "ffmpeg-r2-mp4-v2",
+    video: "ffmpeg-r2-background-mp4-v3",
     ffmpegPath: Boolean(ffmpegPath),
     timestamp: new Date().toISOString()
   });
@@ -823,8 +905,6 @@ app.post("/render/aitl-carousel", requireServerAuth, async (req, res) => {
 });
 
 app.post("/render/aitl-carousel-video", requireServerAuth, async (req, res) => {
-  let workDir;
-
   try {
     const recordId = cleanText(req.body?.recordId);
 
@@ -832,32 +912,76 @@ app.post("/render/aitl-carousel-video", requireServerAuth, async (req, res) => {
       return res.status(400).json({ ok: false, error: "Missing recordId" });
     }
 
-    const rendered = await renderMp4ForRecord(recordId);
-    workDir = rendered.workDir;
+    const exists = await r2ObjectExists(recordId);
+    const videoUrl = getR2PublicUrl(recordId);
 
-    const videoUrl = await uploadMp4ToR2(recordId, rendered.outputPath);
-    const baseUrl = getPublicBaseUrl(req);
+    if (exists) {
+      return res.json({
+        ok: true,
+        renderId: `aitl_video_${recordId}`,
+        status: "ready",
+        videoUrl,
+        storage: "r2",
+        notes: "MP4 already exists in R2."
+      });
+    }
 
-    await safeCleanup(workDir);
+    const job = startBackgroundMp4Render(recordId);
+
+    return res.status(202).json({
+      ok: true,
+      renderId: `aitl_video_${recordId}`,
+      status: job.status,
+      videoUrl,
+      storage: "r2",
+      notes: "MP4 render started in background. Check status endpoint or open the R2 URL after render completes."
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: "Video render trigger failed",
+      message: error?.message || String(error)
+    });
+  }
+});
+
+app.get("/render/aitl-carousel-video/status/:recordId", async (req, res) => {
+  try {
+    const recordId = req.params.recordId;
+    const videoUrl = getR2PublicUrl(recordId);
+    const exists = await r2ObjectExists(recordId);
+
+    if (exists) {
+      return res.json({
+        ok: true,
+        recordId,
+        status: "ready",
+        videoUrl
+      });
+    }
+
+    const job = renderJobs.get(recordId);
+
+    if (job) {
+      return res.json({
+        ok: true,
+        recordId,
+        status: job.status,
+        videoUrl,
+        error: job.error || ""
+      });
+    }
 
     return res.json({
       ok: true,
-      renderId: `aitl_video_${recordId}`,
-      videoUrl,
-      thumbnailUrl: `${baseUrl}/slides/${recordId}/1.png?key=${encodeURIComponent(IMAGE_ACCESS_KEY)}`,
-      format: "mp4",
-      storage: "r2",
-      width: WIDTH,
-      height: HEIGHT,
-      durationSeconds: 20,
-      notes: "Generated MP4, uploaded to Cloudflare R2, and returned permanent playable video URL."
+      recordId,
+      status: "missing",
+      videoUrl
     });
   } catch (error) {
-    if (workDir) await safeCleanup(workDir);
-
     return res.status(500).json({
       ok: false,
-      error: "Video render/upload failed",
+      error: "Status check failed",
       message: error?.message || String(error)
     });
   }
