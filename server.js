@@ -2,6 +2,11 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import sharp from "sharp";
+import ffmpegPath from "ffmpeg-static";
+import { promises as fs } from "fs";
+import path from "path";
+import os from "os";
+import { spawn } from "child_process";
 
 dotenv.config();
 
@@ -14,6 +19,7 @@ app.use(express.json({ limit: "2mb" }));
 const PORT = process.env.PORT || 3000;
 const RENDER_KEY = process.env.AITL_RENDERER_KEY;
 const IMAGE_ACCESS_KEY = process.env.AITL_IMAGE_ACCESS_KEY || RENDER_KEY;
+const VIDEO_ACCESS_KEY = process.env.AITL_VIDEO_ACCESS_KEY || IMAGE_ACCESS_KEY || RENDER_KEY;
 const AIRTABLE_TOKEN = process.env.AIRTABLE_PERSONAL_ACCESS_TOKEN;
 
 const AIRTABLE_BASE_ID = "app47YuxOKMw8vkCj";
@@ -73,16 +79,9 @@ function requireServerAuth(req, res, next) {
 }
 
 function requireImageAccess(req, res, next) {
-  if (!IMAGE_ACCESS_KEY) {
-    return res.status(500).json({
-      ok: false,
-      error: "Server missing AITL_IMAGE_ACCESS_KEY"
-    });
-  }
-
   const suppliedKey = req.query.key;
 
-  if (!suppliedKey || suppliedKey !== IMAGE_ACCESS_KEY) {
+  if (!IMAGE_ACCESS_KEY || suppliedKey !== IMAGE_ACCESS_KEY) {
     return res.status(401).json({
       ok: false,
       error: "Unauthorized image request"
@@ -92,18 +91,23 @@ function requireImageAccess(req, res, next) {
   next();
 }
 
+function requireVideoAccess(req, res, next) {
+  const suppliedKey = req.query.key;
+
+  if (!VIDEO_ACCESS_KEY || suppliedKey !== VIDEO_ACCESS_KEY) {
+    return res.status(401).json({
+      ok: false,
+      error: "Unauthorized video request"
+    });
+  }
+
+  next();
+}
+
 function cleanText(value, fallback = "") {
-  if (Array.isArray(value)) {
-    return value.filter(Boolean).join("\n");
-  }
-
-  if (typeof value === "number") {
-    return String(value);
-  }
-
-  if (typeof value !== "string") {
-    return fallback;
-  }
+  if (Array.isArray(value)) return value.filter(Boolean).join("\n");
+  if (typeof value === "number") return String(value);
+  if (typeof value !== "string") return fallback;
 
   const trimmed = value.trim();
   return trimmed.length ? trimmed : fallback;
@@ -111,10 +115,7 @@ function cleanText(value, fallback = "") {
 
 function cleanBullets(value, fallback = []) {
   if (Array.isArray(value)) {
-    return value
-      .map((item) => cleanText(item))
-      .filter(Boolean)
-      .slice(0, 6);
+    return value.map((item) => cleanText(item)).filter(Boolean).slice(0, 5);
   }
 
   if (typeof value === "string" && value.trim()) {
@@ -122,7 +123,7 @@ function cleanBullets(value, fallback = []) {
       .split(/\n|;/)
       .map((item) => item.replace(/^[-•\d.)\s]+/, "").trim())
       .filter(Boolean)
-      .slice(0, 6);
+      .slice(0, 5);
   }
 
   return fallback;
@@ -140,9 +141,7 @@ function escapeXml(value) {
 function hardLimitText(value, maxChars) {
   const text = cleanText(value).replace(/\s+/g, " ").trim();
 
-  if (text.length <= maxChars) {
-    return text;
-  }
+  if (text.length <= maxChars) return text;
 
   return `${text.slice(0, maxChars - 1).trim()}…`;
 }
@@ -173,9 +172,7 @@ function wrapText(text, maxChars, maxLines = 99) {
     .split("\n")
     .flatMap((line) => wrapLine(line, maxChars));
 
-  if (lines.length <= maxLines) {
-    return lines;
-  }
+  if (lines.length <= maxLines) return lines;
 
   const clipped = lines.slice(0, maxLines);
   clipped[maxLines - 1] = hardLimitText(clipped[maxLines - 1], maxChars - 1);
@@ -191,11 +188,10 @@ function textBlock({
   fill = "#0F172A",
   maxChars = 24,
   maxLines = 99,
-  lineHeight = 1.15,
-  anchor = "start",
-  opacity = 1
+  lineHeight = 1.15
 }) {
   const lines = wrapText(text, maxChars, maxLines);
+
   const tspans = lines
     .map((line, index) => {
       const dy = index === 0 ? 0 : fontSize * lineHeight;
@@ -207,12 +203,10 @@ function textBlock({
     <text
       x="${x}"
       y="${y}"
-      text-anchor="${anchor}"
       font-family="Arial, Helvetica, sans-serif"
       font-size="${fontSize}"
       font-weight="${weight}"
       fill="${fill}"
-      opacity="${opacity}"
     >${tspans}</text>
   `;
 }
@@ -221,11 +215,11 @@ function bulletList({
   bullets,
   x,
   y,
-  fontSize = 44,
+  fontSize = 38,
   fill = "#111827",
-  maxChars = 28,
+  maxChars = 32,
   maxBulletLines = 2,
-  gap = 24
+  gap = 22
 }) {
   let currentY = y;
   let output = "";
@@ -238,10 +232,10 @@ function bulletList({
       <circle cx="${x}" cy="${currentY - fontSize * 0.32}" r="8" fill="#111827"/>
       ${textBlock({
         text: wrapped.join("\n"),
-        x: x + 28,
+        x: x + 30,
         y: currentY,
         fontSize,
-        weight: 650,
+        weight: 700,
         fill,
         maxChars,
         maxLines: maxBulletLines,
@@ -289,9 +283,7 @@ function shell({ eyebrow, slideNumber, bodySvg }) {
 
       ${
         eyebrow
-          ? `<text x="112" y="230" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="800" fill="#64748B" letter-spacing="1.2">${escapeXml(
-              eyebrow
-            )}</text>`
+          ? `<text x="112" y="230" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="800" fill="#64748B" letter-spacing="1.2">${escapeXml(eyebrow)}</text>`
           : ""
       }
 
@@ -326,16 +318,13 @@ function buildSlides(sourceInput = {}) {
   const copy = normalizeSource(sourceInput);
   const slides = [];
 
-  const slide1HookA = hardLimitText(copy.hookA, 125);
-  const slide1HookB = hardLimitText(copy.hookB, 82);
-
   slides.push(
     shell({
       eyebrow: "HOOK",
       slideNumber: "01 / 07",
       bodySvg: `
         ${textBlock({
-          text: slide1HookA,
+          text: hardLimitText(copy.hookA, 125),
           x: 112,
           y: 345,
           fontSize: 58,
@@ -345,7 +334,7 @@ function buildSlides(sourceInput = {}) {
           lineHeight: 1.08
         })}
         ${textBlock({
-          text: slide1HookB,
+          text: hardLimitText(copy.hookB, 82),
           x: 112,
           y: 735,
           fontSize: 48,
@@ -597,10 +586,9 @@ function buildSlides(sourceInput = {}) {
 
   const caption =
     copy.caption ||
-    `${copy.hookA} ${copy.hookB}\n\nBefore you quit a platform, test the angle.\n\nUse AI tools to test assumptions, sharpen positioning, and turn vague ideas into repeatable formats.\n\nSave this if you’re building with AI tools.`;
+    `${copy.hookA} ${copy.hookB}\n\nUse AI tools to test assumptions, sharpen positioning, and turn vague ideas into repeatable formats.\n\nSave this if you’re building with AI tools.`;
 
   return {
-    copy,
     slides,
     caption
   };
@@ -625,8 +613,7 @@ function sourceFromAirtableFields(fields = {}) {
 }
 
 function getPublicBaseUrl(req) {
-  const forwardedProto = req.headers["x-forwarded-proto"];
-  const proto = forwardedProto || req.protocol || "https";
+  const proto = req.headers["x-forwarded-proto"] || req.protocol || "https";
   return `${proto}://${req.get("host")}`;
 }
 
@@ -648,7 +635,7 @@ async function fetchAirtableRecord(recordId) {
 
   try {
     data = text ? JSON.parse(text) : {};
-  } catch (error) {
+  } catch {
     data = { raw: text };
   }
 
@@ -668,6 +655,109 @@ async function svgToPngBuffer(svg) {
     .toBuffer();
 }
 
+function runFfmpeg(args) {
+  return new Promise((resolve, reject) => {
+    if (!ffmpegPath) {
+      reject(new Error("ffmpeg-static path is missing."));
+      return;
+    }
+
+    const child = spawn(ffmpegPath, args, {
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+
+    let stderr = "";
+    let stdout = "";
+
+    child.stdout.on("data", (data) => {
+      stdout += data.toString();
+    });
+
+    child.stderr.on("data", (data) => {
+      stderr += data.toString();
+    });
+
+    child.on("error", reject);
+
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+      } else {
+        reject(new Error(`FFmpeg failed with code ${code}: ${stderr}`));
+      }
+    });
+  });
+}
+
+async function renderMp4ForRecord(recordId) {
+  const record = await fetchAirtableRecord(recordId);
+  const source = sourceFromAirtableFields(record.fields || {});
+  const { slides } = buildSlides(source);
+
+  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `aitl-video-${recordId}-`));
+  const outputPath = path.join(workDir, "carousel.mp4");
+  const listPath = path.join(workDir, "slides.txt");
+
+  const slidePaths = [];
+
+  for (let index = 0; index < slides.length; index++) {
+    const pngBuffer = await svgToPngBuffer(slides[index]);
+    const slidePath = path.join(workDir, `slide_${String(index + 1).padStart(3, "0")}.png`);
+    await fs.writeFile(slidePath, pngBuffer);
+    slidePaths.push(slidePath);
+  }
+
+  let concatText = "";
+
+  for (let index = 0; index < slidePaths.length; index++) {
+    const duration = index === slidePaths.length - 1 ? 3.2 : 2.8;
+    concatText += `file '${slidePaths[index].replaceAll("'", "'\\''")}'\n`;
+    concatText += `duration ${duration}\n`;
+  }
+
+  concatText += `file '${slidePaths[slidePaths.length - 1].replaceAll("'", "'\\''")}'\n`;
+
+  await fs.writeFile(listPath, concatText, "utf8");
+
+  await runFfmpeg([
+    "-y",
+    "-f",
+    "concat",
+    "-safe",
+    "0",
+    "-i",
+    listPath,
+    "-vf",
+    `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=decrease,pad=${WIDTH}:${HEIGHT}:(ow-iw)/2:(oh-ih)/2,format=yuv420p`,
+    "-r",
+    "30",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "veryfast",
+    "-crf",
+    "23",
+    "-movflags",
+    "+faststart",
+    outputPath
+  ]);
+
+  return {
+    workDir,
+    outputPath
+  };
+}
+
+async function safeCleanup(dirPath) {
+  if (!dirPath || !dirPath.includes("aitl-video-")) return;
+
+  try {
+    await fs.rm(dirPath, { recursive: true, force: true });
+  } catch (error) {
+    console.error("Cleanup failed:", error);
+  }
+}
+
 app.get("/health", (req, res) => {
   res.json({
     ok: true,
@@ -675,6 +765,8 @@ app.get("/health", (req, res) => {
     storage: "none",
     cloudinary: false,
     layout: "safe-text-v2",
+    video: "ffmpeg-mp4-v1",
+    ffmpegPath: Boolean(ffmpegPath),
     timestamp: new Date().toISOString()
   });
 });
@@ -690,42 +782,58 @@ app.post("/render/aitl-carousel", requireServerAuth, async (req, res) => {
       });
     }
 
-    const style = cleanText(req.body?.style, "AI Tool MythBuster");
-
-    if (style !== "AI Tool MythBuster") {
-      return res.status(400).json({
-        ok: false,
-        error: "Unsupported carousel style",
-        receivedStyle: style
-      });
-    }
-
-    const source = req.body?.source || {};
-    const { caption } = buildSlides(source);
-    const renderId = `aitl_${recordId}`;
-
     const baseUrl = getPublicBaseUrl(req);
+    const { caption } = buildSlides(req.body?.source || {});
 
     const slideUrls = [1, 2, 3, 4, 5, 6, 7].map((slideNumber) => {
-      return `${baseUrl}/slides/${recordId}/${slideNumber}.png?key=${encodeURIComponent(
-        IMAGE_ACCESS_KEY
-      )}`;
+      return `${baseUrl}/slides/${recordId}/${slideNumber}.png?key=${encodeURIComponent(IMAGE_ACCESS_KEY)}`;
     });
 
     return res.json({
       ok: true,
-      renderId,
-      style,
+      renderId: `aitl_${recordId}`,
+      style: "AI Tool MythBuster",
       slideUrls,
       caption,
-      notes: "Generated 7 live PNG slide URLs from renderer service. No Cloudinary. Safe-text layout v2."
+      notes: "Generated 7 live PNG slide URLs from renderer service. Safe-text layout v2."
     });
   } catch (error) {
-    console.error("Carousel URL generation failed:", error);
-
     return res.status(500).json({
       ok: false,
       error: "Carousel URL generation failed",
+      message: error?.message || String(error)
+    });
+  }
+});
+
+app.post("/render/aitl-carousel-video", requireServerAuth, async (req, res) => {
+  try {
+    const recordId = cleanText(req.body?.recordId);
+
+    if (!recordId) {
+      return res.status(400).json({
+        ok: false,
+        error: "Missing recordId"
+      });
+    }
+
+    const baseUrl = getPublicBaseUrl(req);
+
+    return res.json({
+      ok: true,
+      renderId: `aitl_video_${recordId}`,
+      videoUrl: `${baseUrl}/videos/${recordId}/carousel.mp4?key=${encodeURIComponent(VIDEO_ACCESS_KEY)}`,
+      thumbnailUrl: `${baseUrl}/slides/${recordId}/1.png?key=${encodeURIComponent(IMAGE_ACCESS_KEY)}`,
+      format: "mp4",
+      width: WIDTH,
+      height: HEIGHT,
+      durationSeconds: 20,
+      notes: "Generated playable MP4 URL from 7 live carousel slides using server-side FFmpeg."
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: "Video URL generation failed",
       message: error?.message || String(error)
     });
   }
@@ -747,19 +855,51 @@ app.get("/slides/:recordId/:slideNumber.png", requireImageAccess, async (req, re
     const source = sourceFromAirtableFields(record.fields || {});
     const { slides } = buildSlides(source);
 
-    const svg = slides[slideNumber - 1];
-    const pngBuffer = await svgToPngBuffer(svg);
+    const pngBuffer = await svgToPngBuffer(slides[slideNumber - 1]);
 
     res.setHeader("Content-Type", "image/png");
     res.setHeader("Cache-Control", "no-store");
 
     return res.send(pngBuffer);
   } catch (error) {
-    console.error("Slide render failed:", error);
-
     return res.status(500).json({
       ok: false,
       error: "Slide render failed",
+      message: error?.message || String(error)
+    });
+  }
+});
+
+app.get("/videos/:recordId/carousel.mp4", requireVideoAccess, async (req, res) => {
+  let workDir;
+
+  try {
+    const recordId = req.params.recordId;
+
+    if (!recordId) {
+      return res.status(400).json({
+        ok: false,
+        error: "Missing recordId"
+      });
+    }
+
+    const rendered = await renderMp4ForRecord(recordId);
+    workDir = rendered.workDir;
+
+    res.setHeader("Content-Type", "video/mp4");
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Disposition", `inline; filename="aitl-carousel-${recordId}.mp4"`);
+
+    res.on("finish", () => safeCleanup(workDir));
+    res.on("close", () => safeCleanup(workDir));
+
+    return res.sendFile(rendered.outputPath);
+  } catch (error) {
+    if (workDir) await safeCleanup(workDir);
+
+    return res.status(500).json({
+      ok: false,
+      error: "MP4 render failed",
       message: error?.message || String(error)
     });
   }
