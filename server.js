@@ -137,6 +137,16 @@ function escapeXml(value) {
     .replaceAll("'", "&apos;");
 }
 
+function hardLimitText(value, maxChars) {
+  const text = cleanText(value).replace(/\s+/g, " ").trim();
+
+  if (text.length <= maxChars) {
+    return text;
+  }
+
+  return `${text.slice(0, maxChars - 1).trim()}…`;
+}
+
 function wrapLine(line, maxChars) {
   const words = String(line).split(/\s+/).filter(Boolean);
   const lines = [];
@@ -158,10 +168,18 @@ function wrapLine(line, maxChars) {
   return lines.length ? lines : [""];
 }
 
-function wrapText(text, maxChars) {
-  return String(text)
+function wrapText(text, maxChars, maxLines = 99) {
+  const lines = String(text)
     .split("\n")
     .flatMap((line) => wrapLine(line, maxChars));
+
+  if (lines.length <= maxLines) {
+    return lines;
+  }
+
+  const clipped = lines.slice(0, maxLines);
+  clipped[maxLines - 1] = hardLimitText(clipped[maxLines - 1], maxChars - 1);
+  return clipped;
 }
 
 function textBlock({
@@ -172,11 +190,12 @@ function textBlock({
   weight = 700,
   fill = "#0F172A",
   maxChars = 24,
+  maxLines = 99,
   lineHeight = 1.15,
   anchor = "start",
   opacity = 1
 }) {
-  const lines = wrapText(text, maxChars);
+  const lines = wrapText(text, maxChars, maxLines);
   const tspans = lines
     .map((line, index) => {
       const dy = index === 0 ? 0 : fontSize * lineHeight;
@@ -205,13 +224,14 @@ function bulletList({
   fontSize = 44,
   fill = "#111827",
   maxChars = 28,
+  maxBulletLines = 2,
   gap = 24
 }) {
   let currentY = y;
   let output = "";
 
-  for (const bullet of bullets) {
-    const wrapped = wrapText(bullet, maxChars);
+  for (const bullet of bullets.slice(0, 5)) {
+    const wrapped = wrapText(bullet, maxChars, maxBulletLines);
     const bulletHeight = wrapped.length * fontSize * 1.1 + gap;
 
     output += `
@@ -224,6 +244,7 @@ function bulletList({
         weight: 650,
         fill,
         maxChars,
+        maxLines: maxBulletLines,
         lineHeight: 1.1
       })}
     `;
@@ -257,8 +278,8 @@ function shell({ eyebrow, slideNumber, bodySvg }) {
 
       <rect x="72" y="72" width="936" height="1206" rx="56" fill="#FFFFFF" filter="url(#shadow)"/>
 
-      <rect x="112" y="112" width="250" height="48" rx="24" fill="#111827"/>
-      <text x="237" y="144" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="800" fill="#FFFFFF" letter-spacing="1.5">
+      <rect x="112" y="112" width="276" height="48" rx="24" fill="#111827"/>
+      <text x="250" y="144" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="800" fill="#FFFFFF" letter-spacing="1.5">
         AI TOOL MYTHBUSTER
       </text>
 
@@ -305,39 +326,45 @@ function buildSlides(sourceInput = {}) {
   const copy = normalizeSource(sourceInput);
   const slides = [];
 
+  const slide1HookA = hardLimitText(copy.hookA, 125);
+  const slide1HookB = hardLimitText(copy.hookB, 82);
+
   slides.push(
     shell({
       eyebrow: "HOOK",
       slideNumber: "01 / 07",
       bodySvg: `
         ${textBlock({
-          text: copy.hookA,
+          text: slide1HookA,
           x: 112,
-          y: 420,
-          fontSize: 84,
+          y: 345,
+          fontSize: 58,
           weight: 900,
-          maxChars: 19,
-          lineHeight: 1.06
+          maxChars: 22,
+          maxLines: 5,
+          lineHeight: 1.08
         })}
         ${textBlock({
-          text: copy.hookB,
+          text: slide1HookB,
           x: 112,
-          y: 720,
-          fontSize: 78,
+          y: 735,
+          fontSize: 48,
           weight: 900,
           fill: "#2563EB",
-          maxChars: 20,
-          lineHeight: 1.06
+          maxChars: 24,
+          maxLines: 4,
+          lineHeight: 1.08
         })}
-        <rect x="112" y="980" width="720" height="82" rx="41" fill="#EFF6FF"/>
+        <rect x="112" y="1010" width="730" height="82" rx="41" fill="#EFF6FF"/>
         ${textBlock({
           text: "The platform was not the problem.",
           x: 154,
-          y: 1034,
-          fontSize: 36,
+          y: 1064,
+          fontSize: 34,
           weight: 800,
           fill: "#1D4ED8",
-          maxChars: 34
+          maxChars: 36,
+          maxLines: 1
         })}
       `
     })
@@ -351,30 +378,33 @@ function buildSlides(sourceInput = {}) {
         ${textBlock({
           text: "The bad assumption:",
           x: 112,
-          y: 395,
-          fontSize: 58,
+          y: 365,
+          fontSize: 54,
           weight: 900,
-          maxChars: 24
+          maxChars: 24,
+          maxLines: 2
         })}
-        <rect x="112" y="486" width="856" height="310" rx="36" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="4"/>
+        <rect x="112" y="455" width="856" height="360" rx="36" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="4"/>
         ${textBlock({
-          text: `“${copy.falseBelief}”`,
+          text: `“${hardLimitText(copy.falseBelief, 150)}”`,
           x: 154,
-          y: 610,
-          fontSize: 62,
+          y: 560,
+          fontSize: 48,
           weight: 900,
           fill: "#DC2626",
-          maxChars: 22,
+          maxChars: 28,
+          maxLines: 5,
           lineHeight: 1.08
         })}
         ${textBlock({
-          text: copy.reframeLine,
+          text: hardLimitText(copy.reframeLine, 120),
           x: 112,
           y: 930,
-          fontSize: 60,
+          fontSize: 50,
           weight: 900,
           fill: "#111827",
-          maxChars: 24,
+          maxChars: 27,
+          maxLines: 3,
           lineHeight: 1.1
         })}
       `
@@ -387,22 +417,24 @@ function buildSlides(sourceInput = {}) {
       slideNumber: "03 / 07",
       bodySvg: `
         ${textBlock({
-          text: "So I asked ChatGPT:",
+          text: "So I asked:",
           x: 112,
-          y: 370,
-          fontSize: 56,
+          y: 350,
+          fontSize: 54,
           weight: 900,
-          maxChars: 24
+          maxChars: 24,
+          maxLines: 1
         })}
-        <rect x="112" y="450" width="856" height="540" rx="38" fill="#111827"/>
+        <rect x="112" y="430" width="856" height="610" rx="38" fill="#111827"/>
         ${textBlock({
-          text: `“${copy.proofPrompt}”`,
+          text: `“${hardLimitText(copy.proofPrompt, 260)}”`,
           x: 158,
-          y: 560,
-          fontSize: 44,
+          y: 535,
+          fontSize: 38,
           weight: 750,
           fill: "#FFFFFF",
-          maxChars: 31,
+          maxChars: 36,
+          maxLines: 9,
           lineHeight: 1.18
         })}
       `
@@ -417,19 +449,21 @@ function buildSlides(sourceInput = {}) {
         ${textBlock({
           text: "The answer was simple:",
           x: 112,
-          y: 365,
-          fontSize: 58,
+          y: 340,
+          fontSize: 54,
           weight: 900,
-          maxChars: 23
+          maxChars: 25,
+          maxLines: 2
         })}
         ${bulletList({
           bullets: copy.proofBullets,
           x: 132,
-          y: 520,
-          fontSize: 48,
+          y: 505,
+          fontSize: 42,
           fill: "#111827",
-          maxChars: 27,
-          gap: 30
+          maxChars: 32,
+          maxBulletLines: 3,
+          gap: 28
         })}
       `
     })
@@ -441,34 +475,38 @@ function buildSlides(sourceInput = {}) {
       slideNumber: "05 / 07",
       bodySvg: `
         ${textBlock({
-          text: copy.proofNumber,
+          text: hardLimitText(copy.proofNumber, 50),
           x: 112,
-          y: 430,
-          fontSize: 84,
+          y: 405,
+          fontSize: 74,
           weight: 950,
           fill: "#16A34A",
           maxChars: 18,
+          maxLines: 2,
           lineHeight: 1.05
         })}
-        <rect x="112" y="690" width="856" height="320" rx="38" fill="#F0FDF4" stroke="#86EFAC" stroke-width="4"/>
+        <rect x="112" y="660" width="856" height="370" rx="38" fill="#F0FDF4" stroke="#86EFAC" stroke-width="4"/>
         ${textBlock({
-          text: copy.proofContext,
+          text: hardLimitText(copy.proofContext, 115),
           x: 154,
-          y: 805,
-          fontSize: 58,
+          y: 770,
+          fontSize: 44,
           weight: 900,
           fill: "#166534",
-          maxChars: 25,
+          maxChars: 30,
+          maxLines: 3,
           lineHeight: 1.1
         })}
         ${textBlock({
-          text: copy.proofLine,
+          text: hardLimitText(copy.proofLine, 110),
           x: 154,
-          y: 925,
-          fontSize: 64,
+          y: 930,
+          fontSize: 42,
           weight: 950,
           fill: "#111827",
-          maxChars: 22
+          maxChars: 30,
+          maxLines: 3,
+          lineHeight: 1.1
         })}
       `
     })
@@ -481,21 +519,23 @@ function buildSlides(sourceInput = {}) {
       bodySvg: `
         <rect x="112" y="300" width="856" height="392" rx="36" fill="#EFF6FF"/>
         ${textBlock({
-          text: "USE CHATGPT FOR:",
+          text: "USE IT IF:",
           x: 154,
           y: 370,
           fontSize: 38,
           weight: 950,
           fill: "#1D4ED8",
-          maxChars: 25
+          maxChars: 25,
+          maxLines: 1
         })}
         ${bulletList({
           bullets: copy.useBullets,
           x: 172,
           y: 465,
-          fontSize: 38,
+          fontSize: 34,
           fill: "#111827",
-          maxChars: 32,
+          maxChars: 36,
+          maxBulletLines: 2,
           gap: 18
         })}
 
@@ -507,15 +547,17 @@ function buildSlides(sourceInput = {}) {
           fontSize: 38,
           weight: 950,
           fill: "#DC2626",
-          maxChars: 25
+          maxChars: 25,
+          maxLines: 1
         })}
         ${bulletList({
           bullets: copy.skipBullets,
           x: 172,
           y: 905,
-          fontSize: 38,
+          fontSize: 34,
           fill: "#111827",
-          maxChars: 34,
+          maxChars: 38,
+          maxBulletLines: 2,
           gap: 18
         })}
       `
@@ -528,24 +570,26 @@ function buildSlides(sourceInput = {}) {
       slideNumber: "07 / 07",
       bodySvg: `
         ${textBlock({
-          text: copy.takeaway,
+          text: hardLimitText(copy.takeaway, 190),
           x: 112,
-          y: 385,
-          fontSize: 66,
+          y: 360,
+          fontSize: 52,
           weight: 950,
           fill: "#111827",
-          maxChars: 24,
+          maxChars: 27,
+          maxLines: 7,
           lineHeight: 1.12
         })}
-        <rect x="112" y="1020" width="660" height="82" rx="41" fill="#111827"/>
+        <rect x="112" y="1035" width="690" height="82" rx="41" fill="#111827"/>
         ${textBlock({
           text: "Save this if you build with AI.",
           x: 154,
-          y: 1074,
+          y: 1089,
           fontSize: 34,
           weight: 900,
           fill: "#FFFFFF",
-          maxChars: 34
+          maxChars: 34,
+          maxLines: 1
         })}
       `
     })
@@ -553,7 +597,7 @@ function buildSlides(sourceInput = {}) {
 
   const caption =
     copy.caption ||
-    `${copy.hookA} ${copy.hookB}\n\nBefore you quit a platform, test the angle.\n\nUse ChatGPT to test assumptions, sharpen positioning, and turn vague ideas into repeatable formats.\n\nSave this if you’re building with AI tools.`;
+    `${copy.hookA} ${copy.hookB}\n\nBefore you quit a platform, test the angle.\n\nUse AI tools to test assumptions, sharpen positioning, and turn vague ideas into repeatable formats.\n\nSave this if you’re building with AI tools.`;
 
   return {
     copy,
@@ -630,6 +674,7 @@ app.get("/health", (req, res) => {
     service: "AI Tool Logbook Automated Carousel Renderer",
     storage: "none",
     cloudinary: false,
+    layout: "safe-text-v2",
     timestamp: new Date().toISOString()
   });
 });
@@ -673,7 +718,7 @@ app.post("/render/aitl-carousel", requireServerAuth, async (req, res) => {
       style,
       slideUrls,
       caption,
-      notes: `Generated 7 live PNG slide URLs from renderer service. No Cloudinary. No external image storage.`
+      notes: "Generated 7 live PNG slide URLs from renderer service. No Cloudinary. Safe-text layout v2."
     });
   } catch (error) {
     console.error("Carousel URL generation failed:", error);
@@ -706,7 +751,7 @@ app.get("/slides/:recordId/:slideNumber.png", requireImageAccess, async (req, re
     const pngBuffer = await svgToPngBuffer(svg);
 
     res.setHeader("Content-Type", "image/png");
-    res.setHeader("Cache-Control", "public, max-age=300");
+    res.setHeader("Cache-Control", "no-store");
 
     return res.send(pngBuffer);
   } catch (error) {
