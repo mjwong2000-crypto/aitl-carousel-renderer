@@ -32,7 +32,7 @@ const AIRTABLE_TABLE_URL = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${en
 
 const WIDTH = 1080;
 const HEIGHT = 1920;
-const R2_PREFIX = "aitl-proof-video-v1";
+const R2_PREFIX = "aitl-proof-footage-v1";
 const renderJobs = new Map();
 const renderQueue = [];
 let queueRunning = false;
@@ -232,15 +232,18 @@ function normalizeSource(source = {}) {
   const metric2Value = cleanText(source.metric2Value, "--");
   const metric3Label = cleanText(source.metric3Label, "Usability");
   const metric3Value = cleanText(source.metric3Value, "--");
+
   const outputExcerpt = cleanText(source.proofOutputExcerpt || source.actualOutput || source.testResult || source.rawOutput, "No output excerpt captured yet.");
   const messyInput = cleanText(source.messyInput || source.proofInput, "No messy source input captured yet.");
   const prompt = cleanText(source.testPrompt || source.proofPrompt, "No test prompt captured yet.");
   const verdict = cleanText(source.proofVerdict || source.honestVerdict || source.verdict, "No verdict captured yet.");
   const runner = cleanText(source.proofRunner, source.toolName || "AI API");
   const testType = cleanText(source.proofTestType, "API Text Output");
+
   return {
     toolName: cleanText(source.toolName, "AI Tool"),
     title: cleanText(source.title, "Real AI Tool Test"),
+    shockFaceUrl: cleanText(source.shockFaceUrl, ""),
     runner,
     testType,
     viewerProblem: cleanText(source.viewerProblem, "Creators need repeatable content output, not another generic AI tip."),
@@ -265,121 +268,186 @@ function normalizeSource(source = {}) {
   };
 }
 
+function browserFrame({ x = 64, y = 126, w = 952, h = 1500, title = "AI Tool Logbook Live Test", url = "api.openai.com / real output" }) {
+  return `
+    <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="42" fill="#07111F" stroke="#1E3A8A" stroke-width="4" filter="url(#shadow)"/>
+    <rect x="${x}" y="${y}" width="${w}" height="94" rx="42" fill="#0F172A"/>
+    <rect x="${x}" y="${y + 50}" width="${w}" height="44" fill="#0F172A"/>
+    <circle cx="${x + 52}" cy="${y + 47}" r="13" fill="#EF4444"/>
+    <circle cx="${x + 92}" cy="${y + 47}" r="13" fill="#F59E0B"/>
+    <circle cx="${x + 132}" cy="${y + 47}" r="13" fill="#22C55E"/>
+    <rect x="${x + 190}" y="${y + 24}" width="${w - 245}" height="46" rx="23" fill="#020617" stroke="#1E293B" stroke-width="2"/>
+    ${textBlock({ text: url, x: x + 216, y: y + 55, fontSize: 23, weight: 850, fill: "#94A3B8", maxChars: 50, maxLines: 1 })}
+    ${textBlock({ text: title, x: x + 42, y: y + 142, fontSize: 30, weight: 950, fill: "#E5E7EB", maxChars: 40, maxLines: 1 })}
+  `;
+}
+
+function aiBg({ slideIndex = 1, label = "REAL AI TOOL TEST" }) {
+  return `
+    <svg width="${WIDTH}" height="${HEIGHT}" viewBox="0 0 ${WIDTH} ${HEIGHT}" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#020617"/>
+          <stop offset="52%" stop-color="#07111F"/>
+          <stop offset="100%" stop-color="#111827"/>
+        </linearGradient>
+        <linearGradient id="brand" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#00D9FF"/>
+          <stop offset="50%" stop-color="#2563EB"/>
+          <stop offset="100%" stop-color="#7C3AED"/>
+        </linearGradient>
+        <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+          <feDropShadow dx="0" dy="22" stdDeviation="25" flood-color="#000000" flood-opacity="0.46"/>
+        </filter>
+      </defs>
+      <rect width="${WIDTH}" height="${HEIGHT}" fill="url(#bg)"/>
+      <circle cx="930" cy="270" r="370" fill="#2563EB" opacity="0.18"/>
+      <circle cx="120" cy="1560" r="370" fill="#7C3AED" opacity="0.17"/>
+      <rect x="0" y="0" width="${WIDTH}" height="20" fill="url(#brand)"/>
+      <rect x="0" y="${HEIGHT - 20}" width="${WIDTH}" height="20" fill="url(#brand)"/>
+      <rect x="64" y="56" width="300" height="58" rx="29" fill="#FFFFFF"/>
+      ${textBlock({ text: "AI TOOL LOGBOOK", x: 214, y: 94, fontSize: 25, weight: 950, fill: "#020617", maxChars: 21, maxLines: 1, anchor: "middle", letterSpacing: 1 })}
+      <rect x="64" y="132" width="320" height="54" rx="27" fill="#06121F" stroke="#38BDF8" stroke-width="3"/>
+      ${textBlock({ text: label, x: 224, y: 168, fontSize: 23, weight: 950, fill: "#7DD3FC", maxChars: 22, maxLines: 1, anchor: "middle", letterSpacing: 1 })}
+      ${textBlock({ text: `${String(slideIndex).padStart(2, "0")} / 07`, x: 948, y: 112, fontSize: 34, weight: 950, fill: "#CBD5E1", maxChars: 8, maxLines: 1, anchor: "end" })}
+  `;
+}
+
+function closeSvg() {
+  return `</svg>`;
+}
+
+function terminalBox({ x, y, w, h, lines = [] }) {
+  let out = `
+    <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="32" fill="#020617" stroke="#334155" stroke-width="4"/>
+    <rect x="${x}" y="${y}" width="${w}" height="76" rx="32" fill="#111827"/>
+    <circle cx="${x + 42}" cy="${y + 38}" r="12" fill="#EF4444"/>
+    <circle cx="${x + 80}" cy="${y + 38}" r="12" fill="#F59E0B"/>
+    <circle cx="${x + 118}" cy="${y + 38}" r="12" fill="#22C55E"/>
+    ${textBlock({ text: "LIVE API CALL", x: x + 160, y: y + 48, fontSize: 24, weight: 950, fill: "#D1FAE5", maxChars: 28, maxLines: 1, letterSpacing: 1 })}
+  `;
+  let yy = y + 130;
+  for (const line of lines.slice(0, 8)) {
+    out += textBlock({ text: line, x: x + 42, y: yy, fontSize: 27, weight: 850, fill: "#D1FAE5", maxChars: 42, maxLines: 1, family: "Courier New, monospace" });
+    yy += 52;
+  }
+  return out;
+}
+
+function outputReceipt({ x, y, w, h, lines = [], highlight = 1 }) {
+  let out = `
+    <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="34" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="3"/>
+    <rect x="${x + 28}" y="${y + 28}" width="${w - 56}" height="68" rx="24" fill="#0F172A"/>
+    ${textBlock({ text: "ACTUAL OUTPUT RECEIPT", x: x + 64, y: y + 72, fontSize: 25, weight: 950, fill: "#38BDF8", maxChars: 30, maxLines: 1, letterSpacing: 1 })}
+  `;
+  let yy = y + 148;
+  lines.slice(0, 8).forEach((line, idx) => {
+    const isHot = idx === highlight;
+    out += `<rect x="${x + 34}" y="${yy - 36}" width="${w - 68}" height="58" rx="16" fill="${isHot ? "#DBEAFE" : idx % 2 ? "#EEF2FF" : "#FFFFFF"}" stroke="${isHot ? "#2563EB" : "none"}" stroke-width="${isHot ? 3 : 0}"/>`;
+    out += textBlock({ text: line, x: x + 62, y: yy, fontSize: 26, weight: isHot ? 950 : 820, fill: "#0F172A", maxChars: 42, maxLines: 1 });
+    yy += 64;
+  });
+  return out;
+}
+
+function metricCard({ x, y, label, value, color }) {
+  return `
+    <rect x="${x}" y="${y}" width="300" height="150" rx="30" fill="#020617" stroke="${color}" stroke-width="4" filter="url(#shadow)"/>
+    ${textBlock({ text: label.toUpperCase(), x: x + 28, y: y + 46, fontSize: 22, weight: 950, fill: "#94A3B8", maxChars: 19, maxLines: 1, letterSpacing: 1 })}
+    ${textBlock({ text: value, x: x + 150, y: y + 112, fontSize: 46, weight: 950, fill: "#FFFFFF", maxChars: 13, maxLines: 1, anchor: "middle" })}
+  `;
+}
+
 function buildSlides(sourceInput = {}) {
   const p = normalizeSource(sourceInput);
-  const outputLines = splitOutputLines(p.outputExcerpt || p.rawOutput, 8);
-  const proofBullets = outputLines.length ? outputLines : [p.outputExcerpt];
+  const outputLines = splitOutputLines(p.outputExcerpt || p.rawOutput, 10);
+  const proofLines = outputLines.length ? outputLines : [p.outputExcerpt];
+  const faceNote = p.shockFaceUrl ? "" : "Add AITL Shock Face Image to unlock real face hook.";
   const caption = p.caption || `${p.toolName} proof-tested by AI Tool Logbook. Real API output captured. Metrics: ${p.metric1Label}: ${p.metric1Value}; ${p.metric2Label}: ${p.metric2Value}; ${p.metric3Label}: ${p.metric3Value}.`;
 
   const slides = [];
 
-  slides.push(proofShell({ slideIndex: 1, label: "REAL API TEST", toolName: p.toolName, dark: true, bodySvg: `
-    ${textBlock({ text: "I TESTED", x: 100, y: 395, fontSize: 62, weight: 950, fill: "#38BDF8", maxChars: 12, maxLines: 1, letterSpacing: 2 })}
-    ${textBlock({ text: hardLimitText(p.toolName, 34), x: 100, y: 545, fontSize: 96, weight: 950, fill: "#FFFFFF", maxChars: 14, maxLines: 3, lineHeight: 0.98 })}
-    <rect x="100" y="870" width="880" height="10" rx="5" fill="url(#cyanGlow)"/>
-    ${textBlock({ text: "Not a homepage review. Not a hype list. Real prompt in. Real output out.", x: 100, y: 1015, fontSize: 58, weight: 900, fill: "#E5E7EB", maxChars: 22, maxLines: 4, lineHeight: 1.05 })}
-    ${metricTile({ x: 100, y: 1370, w: 260, h: 190, label: p.metric1Label, value: p.metric1Value, accent: "#38BDF8" })}
-    ${metricTile({ x: 410, y: 1370, w: 260, h: 190, label: p.metric2Label, value: p.metric2Value, accent: "#22C55E" })}
-    ${metricTile({ x: 720, y: 1370, w: 260, h: 190, label: p.metric3Label, value: p.metric3Value, accent: "#A78BFA" })}
-  ` }));
+  slides.push(`${aiBg({ slideIndex: 1, label: "REAL AI TEST" })}
+    <rect x="64" y="220" width="952" height="1430" rx="48" fill="rgba(2,6,23,0.52)" stroke="#1D4ED8" stroke-width="4" filter="url(#shadow)"/>
+    ${textBlock({ text: "I TESTED", x: 96, y: 380, fontSize: 74, weight: 950, fill: "#38BDF8", maxChars: 12, maxLines: 1, letterSpacing: 2 })}
+    ${textBlock({ text: hardLimitText(p.toolName, 32), x: 96, y: 520, fontSize: 86, weight: 950, fill: "#FFFFFF", maxChars: 13, maxLines: 3, lineHeight: 1.0 })}
+    <rect x="96" y="760" width="520" height="10" rx="5" fill="url(#brand)"/>
+    ${textBlock({ text: "NOT A HOMEPAGE REVIEW.", x: 96, y: 900, fontSize: 50, weight: 950, fill: "#FFFFFF", maxChars: 22, maxLines: 1 })}
+    ${textBlock({ text: "REAL PROMPT IN. REAL OUTPUT OUT.", x: 96, y: 978, fontSize: 46, weight: 950, fill: "#E5E7EB", maxChars: 24, maxLines: 2, lineHeight: 1.05 })}
+    <rect x="605" y="236" width="420" height="420" rx="210" fill="#0F172A" stroke="#38BDF8" stroke-width="6"/>
+    ${textBlock({ text: faceNote, x: 640, y: 700, fontSize: 26, weight: 900, fill: "#FCA5A5", maxChars: 25, maxLines: 2 })}
+    ${metricCard({ x: 96, y: 1295, label: p.metric1Label, value: p.metric1Value, color: "#38BDF8" })}
+    ${metricCard({ x: 390, y: 1295, label: p.metric2Label, value: p.metric2Value, color: "#22C55E" })}
+    ${metricCard({ x: 684, y: 1295, label: p.metric3Label, value: p.metric3Value, color: "#A78BFA" })}
+    ${textBlock({ text: hardLimitText(p.viewerProblem, 100), x: 96, y: 1570, fontSize: 36, weight: 850, fill: "#CBD5E1", maxChars: 32, maxLines: 2 })}
+  ${closeSvg()}`);
 
-  slides.push(proofShell({ slideIndex: 2, label: "SOURCE INPUT", toolName: p.toolName, dark: true, bodySvg: `
-    ${textBlock({ text: "The messy input", x: 100, y: 350, fontSize: 68, weight: 950, fill: "#FFFFFF", maxChars: 20, maxLines: 1 })}
-    ${textBlock({ text: hardLimitText(p.viewerProblem, 105), x: 100, y: 445, fontSize: 40, weight: 800, fill: "#CBD5E1", maxChars: 36, maxLines: 3, lineHeight: 1.12 })}
-    ${documentBox({ x: 100, y: 635, w: 880, h: 830, title: "actual source given to tool", text: p.messyInput, accent: "#38BDF8" })}
-    <rect x="100" y="1525" width="880" height="105" rx="30" fill="#0F172A" stroke="#38BDF8" stroke-width="3"/>
-    ${textBlock({ text: "If the input is weak, the result will be weak.", x: 140, y: 1590, fontSize: 34, weight: 950, fill: "#7DD3FC", maxChars: 40, maxLines: 1 })}
-  ` }));
+  slides.push(`${aiBg({ slideIndex: 2, label: "THE SETUP" })}
+    ${browserFrame({ title: "The messy input before the test", url: "source-input.txt" })}
+    ${textBlock({ text: "THIS WAS THE INPUT", x: 110, y: 340, fontSize: 64, weight: 950, fill: "#FFFFFF", maxChars: 18, maxLines: 2 })}
+    <rect x="110" y="450" width="860" height="760" rx="36" fill="#020617" stroke="#334155" stroke-width="4"/>
+    ${textBlock({ text: hardLimitText(p.messyInput, 520), x: 150, y: 535, fontSize: 34, weight: 800, fill: "#E5E7EB", maxChars: 39, maxLines: 13, lineHeight: 1.14 })}
+    <rect x="110" y="1290" width="860" height="210" rx="34" fill="#082F49" stroke="#38BDF8" stroke-width="4"/>
+    ${textBlock({ text: "THE TEST: Can it turn this into something usable?", x: 150, y: 1380, fontSize: 44, weight: 950, fill: "#FFFFFF", maxChars: 29, maxLines: 2 })}
+  ${closeSvg()}`);
 
-  slides.push(proofShell({ slideIndex: 3, label: "API CALL", toolName: p.toolName, dark: true, bodySvg: `
-    ${textBlock({ text: "The actual test", x: 100, y: 355, fontSize: 70, weight: 950, fill: "#FFFFFF", maxChars: 18, maxLines: 1 })}
-    ${terminalWindow({ x: 100, y: 475, w: 880, h: 900, title: `${p.runner} / ${p.testType}`, lines: ["POST /v1/chat/completions", "status: 200 OK", `runner: ${hardLimitText(p.runner, 24)}`, `test: ${hardLimitText(p.testType, 24)}`, "input: creator framework", "output: generated response"], prompt: p.prompt })}
-    <rect x="100" y="1450" width="880" height="120" rx="34" fill="#064E3B" stroke="#22C55E" stroke-width="3"/>
-    ${textBlock({ text: hardLimitText(p.toolAction, 92), x: 140, y: 1520, fontSize: 34, weight: 900, fill: "#D1FAE5", maxChars: 40, maxLines: 2 })}
-  ` }));
+  slides.push(`${aiBg({ slideIndex: 3, label: "PROMPT RUN" })}
+    ${browserFrame({ title: "The exact prompt that ran", url: "POST /v1/chat/completions" })}
+    ${terminalBox({ x: 110, y: 300, w: 860, h: 600, lines: [
+      "$ POST /v1/chat/completions",
+      `> model: ${p.runner}`,
+      "> input: messy framework",
+      "> task: build usable system",
+      "> status: running...",
+      "> output: captured"
+    ] })}
+    <rect x="110" y="980" width="860" height="430" rx="36" fill="#020617" stroke="#2563EB" stroke-width="4"/>
+    ${textBlock({ text: hardLimitText(p.prompt, 270), x: 150, y: 1070, fontSize: 34, weight: 820, fill: "#E5E7EB", maxChars: 38, maxLines: 8, lineHeight: 1.12 })}
+    ${metricCard({ x: 110, y: 1500, label: p.metric1Label, value: p.metric1Value, color: "#38BDF8" })}
+  ${closeSvg()}`);
 
-  slides.push(proofShell({ slideIndex: 4, label: "REAL OUTPUT", toolName: p.toolName, dark: true, bodySvg: `
-    ${textBlock({ text: "This is what came back", x: 100, y: 350, fontSize: 62, weight: 950, fill: "#FFFFFF", maxChars: 23, maxLines: 2, lineHeight: 1.02 })}
-    ${outputReceipt({ x: 100, y: 525, w: 880, h: 920, title: "generated output excerpt", text: p.outputExcerpt })}
-    <rect x="100" y="1510" width="880" height="110" rx="32" fill="#111827" stroke="#A78BFA" stroke-width="3"/>
-    ${textBlock({ text: p.comedyReaction, x: 140, y: 1580, fontSize: 36, weight: 950, fill: "#EDE9FE", maxChars: 40, maxLines: 1 })}
-  ` }));
+  slides.push(`${aiBg({ slideIndex: 4, label: "OUTPUT RECEIPT" })}
+    ${browserFrame({ title: "Actual generated output", url: "response-output.json" })}
+    ${textBlock({ text: "HERE IS WHAT CAME BACK", x: 110, y: 320, fontSize: 58, weight: 950, fill: "#FFFFFF", maxChars: 22, maxLines: 2 })}
+    ${outputReceipt({ x: 110, y: 440, w: 860, h: 840, lines: proofLines, highlight: 1 })}
+    <rect x="110" y="1360" width="860" height="176" rx="34" fill="#052E16" stroke="#22C55E" stroke-width="4"/>
+    ${textBlock({ text: "This is the receipt. Not vibes.", x: 150, y: 1464, fontSize: 48, weight: 950, fill: "#86EFAC", maxChars: 28, maxLines: 1 })}
+  ${closeSvg()}`);
 
-  slides.push(proofShell({ slideIndex: 5, label: "PROOF METRICS", toolName: p.toolName, dark: true, bodySvg: `
-    ${textBlock({ text: "Proof dashboard", x: 100, y: 350, fontSize: 70, weight: 950, fill: "#FFFFFF", maxChars: 18, maxLines: 1 })}
-    ${metricTile({ x: 100, y: 500, w: 880, h: 210, label: p.metric1Label, value: p.metric1Value, accent: "#38BDF8" })}
-    ${metricTile({ x: 100, y: 770, w: 880, h: 210, label: p.metric2Label, value: p.metric2Value, accent: "#22C55E" })}
-    ${metricTile({ x: 100, y: 1040, w: 880, h: 210, label: p.metric3Label, value: p.metric3Value, accent: "#A78BFA" })}
-    <rect x="100" y="1330" width="880" height="230" rx="44" fill="#0F172A" stroke="#475569" stroke-width="3"/>
-    ${textBlock({ text: `Captured: ${hardLimitText(p.completedAt, 45)}`, x: 140, y: 1410, fontSize: 34, weight: 900, fill: "#CBD5E1", maxChars: 40, maxLines: 1 })}
-    ${textBlock({ text: hardLimitText(p.proofContext, 110), x: 140, y: 1490, fontSize: 32, weight: 800, fill: "#94A3B8", maxChars: 43, maxLines: 2 })}
-  ` }));
+  slides.push(`${aiBg({ slideIndex: 5, label: "BIG NUMBERS" })}
+    ${textBlock({ text: p.metric1Value, x: 540, y: 480, fontSize: 190, weight: 950, fill: "#38BDF8", maxChars: 10, maxLines: 1, anchor: "middle" })}
+    ${textBlock({ text: p.metric1Label.toUpperCase(), x: 540, y: 560, fontSize: 38, weight: 950, fill: "#CBD5E1", maxChars: 24, maxLines: 1, anchor: "middle", letterSpacing: 2 })}
+    <rect x="110" y="680" width="860" height="10" rx="5" fill="url(#brand)"/>
+    ${textBlock({ text: p.metric2Value, x: 540, y: 980, fontSize: 120, weight: 950, fill: "#FFFFFF", maxChars: 16, maxLines: 1, anchor: "middle" })}
+    ${textBlock({ text: p.metric2Label.toUpperCase(), x: 540, y: 1060, fontSize: 38, weight: 950, fill: "#CBD5E1", maxChars: 24, maxLines: 1, anchor: "middle", letterSpacing: 2 })}
+    ${textBlock({ text: p.metric3Value, x: 540, y: 1380, fontSize: 150, weight: 950, fill: "#A78BFA", maxChars: 10, maxLines: 1, anchor: "middle" })}
+    ${textBlock({ text: p.metric3Label.toUpperCase(), x: 540, y: 1460, fontSize: 38, weight: 950, fill: "#CBD5E1", maxChars: 24, maxLines: 1, anchor: "middle", letterSpacing: 2 })}
+  ${closeSvg()}`);
 
-  slides.push(proofShell({ slideIndex: 6, label: "WHAT WORKED", toolName: p.toolName, dark: true, bodySvg: `
-    ${textBlock({ text: "Useful parts from the output", x: 100, y: 350, fontSize: 60, weight: 950, fill: "#FFFFFF", maxChars: 24, maxLines: 2, lineHeight: 1.04 })}
-    ${outputReceipt({ x: 100, y: 520, w: 880, h: 650, title: "proof receipts", text: proofBullets.join("\n") })}
-    <rect x="100" y="1260" width="420" height="260" rx="38" fill="#022C22" stroke="#22C55E" stroke-width="4"/>
-    ${textBlock({ text: "USE IT IF", x: 136, y: 1330, fontSize: 32, weight: 950, fill: "#86EFAC", maxChars: 18, maxLines: 1, letterSpacing: 1 })}
-    ${textBlock({ text: p.useItIf, x: 136, y: 1410, fontSize: 31, weight: 850, fill: "#FFFFFF", maxChars: 20, maxLines: 3, lineHeight: 1.12 })}
-    <rect x="560" y="1260" width="420" height="260" rx="38" fill="#450A0A" stroke="#EF4444" stroke-width="4"/>
-    ${textBlock({ text: "SKIP IT IF", x: 596, y: 1330, fontSize: 32, weight: 950, fill: "#FCA5A5", maxChars: 18, maxLines: 1, letterSpacing: 1 })}
-    ${textBlock({ text: p.skipItIf, x: 596, y: 1410, fontSize: 31, weight: 850, fill: "#FFFFFF", maxChars: 20, maxLines: 3, lineHeight: 1.12 })}
-  ` }));
+  slides.push(`${aiBg({ slideIndex: 6, label: "VERDICT" })}
+    ${browserFrame({ title: "Would I use this in production?", url: "final-verdict.md" })}
+    ${textBlock({ text: "WOULD I USE THIS?", x: 110, y: 360, fontSize: 68, weight: 950, fill: "#FFFFFF", maxChars: 18, maxLines: 2 })}
+    <rect x="110" y="500" width="860" height="500" rx="42" fill="#06121F" stroke="#38BDF8" stroke-width="4"/>
+    ${textBlock({ text: hardLimitText(p.verdict, 280), x: 155, y: 600, fontSize: 44, weight: 900, fill: "#E5E7EB", maxChars: 30, maxLines: 7, lineHeight: 1.08 })}
+    <rect x="160" y="1130" width="760" height="170" rx="42" fill="#052E16" stroke="#22C55E" stroke-width="6"/>
+    ${textBlock({ text: "WORTH TESTING", x: 540, y: 1238, fontSize: 58, weight: 950, fill: "#86EFAC", maxChars: 18, maxLines: 1, anchor: "middle", letterSpacing: 1 })}
+  ${closeSvg()}`);
 
-  slides.push(proofShell({ slideIndex: 7, label: "FINAL VERDICT", toolName: p.toolName, dark: true, bodySvg: `
-    ${textBlock({ text: "Final verdict", x: 100, y: 355, fontSize: 72, weight: 950, fill: "#38BDF8", maxChars: 18, maxLines: 1, letterSpacing: 1 })}
-    <rect x="100" y="500" width="880" height="360" rx="58" fill="url(#cyanGlow)"/>
-    ${textBlock({ text: "REAL OUTPUT CAPTURED", x: 540, y: 665, fontSize: 58, weight: 950, fill: "#FFFFFF", maxChars: 22, maxLines: 2, anchor: "middle", lineHeight: 1.02 })}
-    ${textBlock({ text: `${p.metric1Label}: ${p.metric1Value}  •  ${p.metric3Label}: ${p.metric3Value}`, x: 540, y: 785, fontSize: 30, weight: 950, fill: "#E0F2FE", maxChars: 44, maxLines: 1, anchor: "middle" })}
-    ${textBlock({ text: hardLimitText(p.verdict, 230), x: 100, y: 1040, fontSize: 54, weight: 950, fill: "#FFFFFF", maxChars: 25, maxLines: 6, lineHeight: 1.08 })}
-    <rect x="100" y="1550" width="720" height="92" rx="46" fill="#FFFFFF"/>
-    ${textBlock({ text: "Save this before testing another AI tool.", x: 140, y: 1608, fontSize: 31, weight: 950, fill: "#020617", maxChars: 38, maxLines: 1 })}
-  ` }));
+  slides.push(`${aiBg({ slideIndex: 7, label: "NEXT TEST" })}
+    ${textBlock({ text: "THE LESSON", x: 90, y: 340, fontSize: 76, weight: 950, fill: "#38BDF8", maxChars: 14, maxLines: 1, letterSpacing: 2 })}
+    ${textBlock({ text: "AI tools are boring until you test them against a real workflow.", x: 90, y: 500, fontSize: 66, weight: 950, fill: "#FFFFFF", maxChars: 21, maxLines: 4, lineHeight: 1.02 })}
+    <rect x="90" y="980" width="850" height="270" rx="42" fill="#020617" stroke="#334155" stroke-width="4"/>
+    ${textBlock({ text: "Next test: another AI tool, same rule — real input, real output, real verdict.", x: 135, y: 1080, fontSize: 44, weight: 900, fill: "#E5E7EB", maxChars: 31, maxLines: 3 })}
+    <rect x="90" y="1390" width="620" height="110" rx="55" fill="#FFFFFF"/>
+    ${textBlock({ text: "SAVE THE RECEIPTS", x: 400, y: 1460, fontSize: 38, weight: 950, fill: "#020617", maxChars: 24, maxLines: 1, anchor: "middle" })}
+    <rect x="735" y="1260" width="280" height="280" rx="140" fill="#0F172A" stroke="#38BDF8" stroke-width="5"/>
+  ${closeSvg()}`);
 
   return { slides, caption };
 }
 
-function sourceFromAirtableFields(fields = {}) {
-  return {
-    toolName: fields["Tool Name"],
-    title: fields["Title"],
-    proofRunner: fields["AITL Proof Runner"],
-    proofTestType: fields["AITL Proof Test Type"],
-    proofInput: fields["AITL Proof Input"],
-    messyInput: fields["AITL Messy Input"],
-    viewerProblem: fields["AITL Viewer Problem"],
-    toolAction: fields["AITL Tool Action"],
-    proofPrompt: fields["AITL Proof Prompt"],
-    testPrompt: fields["AITL Test Prompt"],
-    rawOutput: fields["AITL Proof Raw Output"],
-    proofOutputExcerpt: fields["AITL Proof Output Excerpt"],
-    actualOutput: fields["AITL Actual Output"],
-    testResult: fields["AITL Test Result"],
-    metric1Label: fields["AITL Proof Metric 1 Label"],
-    metric1Value: fields["AITL Proof Metric One Value"],
-    metric2Label: fields["AITL Proof Metric 2 Label"],
-    metric2Value: fields["AITL Proof Metric Two Result"],
-    metric3Label: fields["AITL Proof Metric Three Label"],
-    metric3Value: fields["AITL Proof Metric Three Result"],
-    proofVerdict: fields["AITL Proof Verdict"],
-    honestVerdict: fields["AITL Honest Verdict"],
-    verdict: fields["Verdict"],
-    comedyReaction: fields["AITL Comedy Reaction"],
-    useItIf: fields["Use It If"],
-    skipItIf: fields["Skip It If"],
-    completedAt: fields["AITL Proof Completed Time"],
-    proofContext: fields["AITL Proof Context"],
-    caption: fields["AITL Carousel Caption"]
-  };
-}
-
-function getPublicBaseUrl(req) {
-  const proto = req.headers["x-forwarded-proto"] || req.protocol || "https";
-  return `${proto}://${req.get("host")}`;
-}
-
 function getR2ObjectKey(recordId) {
-  return `${R2_PREFIX}/${recordId}/carousel.mp4`;
+  return `${R2_PREFIX}/${recordId}/video.mp4`;
 }
 
 function getR2PublicUrl(recordId) {
@@ -429,13 +497,14 @@ async function renderMp4ForRecord(recordId) {
   const source = sourceFromAirtableFields(record.fields || {});
   const { slides } = buildSlides(source);
 
-  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `aitl-proof-evidence-v1-${recordId}-`));
-  const outputPath = path.join(workDir, "carousel.mp4");
+  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `aitl-proof-footage-v1-${recordId}-`));
+  const outputPath = path.join(workDir, "video.mp4");
   const listPath = path.join(workDir, "slides.txt");
   const slidePaths = [];
 
   for (let index = 0; index < slides.length; index++) {
-    const pngBuffer = await svgToPngBuffer(slides[index]);
+    let pngBuffer = await svgToPngBuffer(slides[index]);
+    pngBuffer = await compositeShockFace(pngBuffer, source, index);
     const slidePath = path.join(workDir, `slide_${String(index + 1).padStart(3, "0")}.png`);
     await fs.writeFile(slidePath, pngBuffer);
     slidePaths.push(slidePath);
@@ -476,7 +545,7 @@ async function uploadMp4ToR2(recordId, filePath) {
 }
 
 async function safeCleanup(dirPath) {
-  if (!dirPath || !dirPath.includes("aitl-proof-evidence-v1-")) return;
+  if (!dirPath || !dirPath.includes("aitl-proof-footage-v1-")) return;
   try { await fs.rm(dirPath, { recursive: true, force: true }); } catch (error) { console.error("Cleanup failed:", error); }
 }
 
@@ -505,11 +574,11 @@ async function processRenderQueue() {
       const videoUrl = await uploadMp4ToR2(recordId, rendered.outputPath);
       await safeCleanup(workDir);
       renderJobs.set(recordId, { recordId, status: "ready", startedAt: job.startedAt, finishedAt: new Date().toISOString(), videoUrl, error: "" });
-      console.log(`Proof Evidence MP4 uploaded to R2 for ${recordId}: ${videoUrl}`);
+      console.log(`Proof Footage MP4 uploaded to R2 for ${recordId}: ${videoUrl}`);
     } catch (error) {
       if (workDir) await safeCleanup(workDir);
       renderJobs.set(recordId, { recordId, status: "failed", startedAt: job.startedAt, finishedAt: new Date().toISOString(), videoUrl: getR2PublicUrl(recordId), error: error?.message || String(error) });
-      console.error(`Proof Evidence background MP4 render failed for ${recordId}:`, error);
+      console.error(`Proof Footage background MP4 render failed for ${recordId}:`, error);
     }
   }
   queueRunning = false;
@@ -518,16 +587,16 @@ async function processRenderQueue() {
 app.get("/health", (req, res) => {
   res.json({
     ok: true,
-    service: "AI Tool Logbook Proof Evidence Renderer",
+    service: "AI Tool Logbook Proof Footage Renderer",
     storage: "r2",
     r2Configured: Boolean(r2Client && R2_PUBLIC_BASE_URL && R2_BUCKET),
     bucket: R2_BUCKET,
     cloudinary: false,
-    layout: "proof-evidence-v1",
-    video: "ffmpeg-r2-proof-evidence-v1",
+    layout: "proof-footage-v1-shock-face",
+    video: "ffmpeg-r2-proof-footage-v1",
     dimensions: `${WIDTH}x${HEIGHT}`,
     r2KeyPrefix: R2_PREFIX,
-    renderMode: "proof-evidence-single-ffmpeg-pass",
+    renderMode: "proof-footage-single-ffmpeg-pass",
     queueRunning,
     queuedJobs: renderQueue.length,
     ffmpegPath: Boolean(ffmpegPath),
@@ -542,7 +611,7 @@ app.post("/render/aitl-carousel", requireServerAuth, async (req, res) => {
     const baseUrl = getPublicBaseUrl(req);
     const { caption } = buildSlides(req.body?.source || {});
     const slideUrls = [1, 2, 3, 4, 5, 6, 7].map((slideNumber) => `${baseUrl}/slides/${recordId}/${slideNumber}.png?key=${encodeURIComponent(IMAGE_ACCESS_KEY)}`);
-    return res.json({ ok: true, renderId: `aitl_proof_${recordId}`, style: "AI Tool Logbook Proof Evidence V1", slideUrls, caption, notes: "Generated 7 vertical proof-evidence PNG slide URLs. Uses real proof fields." });
+    return res.json({ ok: true, renderId: `aitl_proof_${recordId}`, style: "AI Tool Logbook Proof Footage V1", slideUrls, caption, notes: "Generated 7 vertical proof-evidence PNG slide URLs. Uses real proof fields." });
   } catch (error) {
     return res.status(500).json({ ok: false, error: "Proof evidence URL generation failed", message: error?.message || String(error) });
   }
@@ -554,9 +623,9 @@ app.post("/render/aitl-carousel-video", requireServerAuth, async (req, res) => {
     if (!recordId) return res.status(400).json({ ok: false, error: "Missing recordId" });
     const exists = await r2ObjectExists(recordId);
     const videoUrl = getR2PublicUrl(recordId);
-    if (exists && req.body?.force !== true) return res.json({ ok: true, renderId: `aitl_proof_video_${recordId}`, status: "ready", videoUrl, storage: "r2", notes: "Proof Evidence MP4 already exists in R2. Send force=true to regenerate." });
+    if (exists && req.body?.force !== true) return res.json({ ok: true, renderId: `aitl_proof_video_${recordId}`, status: "ready", videoUrl, storage: "r2", notes: "Proof Footage MP4 already exists in R2. Send force=true to regenerate." });
     const job = enqueueBackgroundMp4Render(recordId);
-    return res.status(202).json({ ok: true, renderId: `aitl_proof_video_${recordId}`, status: job.status, videoUrl, storage: "r2", notes: "Proof Evidence MP4 render queued. Check status endpoint or open R2 URL after render completes." });
+    return res.status(202).json({ ok: true, renderId: `aitl_proof_video_${recordId}`, status: job.status, videoUrl, storage: "r2", notes: "Proof Footage MP4 render queued. Check status endpoint or open R2 URL after render completes." });
   } catch (error) {
     return res.status(500).json({ ok: false, error: "Proof evidence video render trigger failed", message: error?.message || String(error) });
   }
@@ -585,7 +654,8 @@ app.get("/slides/:recordId/:slideNumber.png", requireImageAccess, async (req, re
     const record = await fetchAirtableRecord(recordId);
     const source = sourceFromAirtableFields(record.fields || {});
     const { slides } = buildSlides(source);
-    const pngBuffer = await svgToPngBuffer(slides[slideNumber - 1]);
+    let pngBuffer = await svgToPngBuffer(slides[slideNumber - 1]);
+    pngBuffer = await compositeShockFace(pngBuffer, source, slideNumber - 1);
     res.setHeader("Content-Type", "image/png");
     res.setHeader("Cache-Control", "no-store");
     return res.send(pngBuffer);
@@ -595,5 +665,5 @@ app.get("/slides/:recordId/:slideNumber.png", requireImageAccess, async (req, re
 });
 
 app.listen(PORT, () => {
-  console.log(`AI Tool Logbook Proof Evidence Renderer running on port ${PORT}`);
+  console.log(`AI Tool Logbook Proof Footage Renderer running on port ${PORT}`);
 });
