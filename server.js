@@ -44,6 +44,7 @@ const r2Client = R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY
 
 let queueRunning = false;
 const renderQueue = [];
+const jobHistory = new Map();
 
 function cleanText(value, fallback = "") {
   if (value === null || value === undefined) return fallback;
@@ -429,6 +430,8 @@ async function processQueue() {
         job.status = "failed";
         job.error = error?.message || String(error);
       }
+      job.finishedAt = new Date().toISOString();
+      jobHistory.set(job.recordId, { ...job });
       renderQueue.shift();
     }
   } finally {
@@ -460,7 +463,7 @@ app.get("/health", (req, res) => {
     video: "ffmpeg-r2-proof-footage-v2",
     dimensions: `${WIDTH}x${HEIGHT}`,
     r2KeyPrefix: R2_PREFIX,
-    renderMode: "proof-footage-v2-keyart-single-ffmpeg-pass",
+    renderMode: "proof-footage-v2-keyart-single-ffmpeg-pass-debug-visible",
     queueRunning,
     queuedJobs: renderQueue.length,
     ffmpegPath: Boolean(ffmpegPath),
@@ -486,9 +489,67 @@ app.get("/render/aitl-carousel-video/status/:recordId", async (req, res) => {
   const recordId = cleanText(req.params.recordId);
   const videoUrl = getR2PublicUrl(recordId);
   const queued = renderQueue.find((j) => j.recordId === recordId);
-  if (queued) return res.json({ ok: true, recordId, status: queued.status, videoUrl, error: queued.error });
+  if (queued) {
+    return res.json({
+      ok: true,
+      recordId,
+      status: queued.status,
+      videoUrl,
+      error: queued.error || null,
+      createdAt: queued.createdAt || null
+    });
+  }
+
   const exists = await r2ObjectExists(recordId);
-  return res.json({ ok: true, recordId, status: exists ? "ready" : "missing", videoUrl });
+  if (exists) {
+    return res.json({
+      ok: true,
+      recordId,
+      status: "ready",
+      videoUrl
+    });
+  }
+
+  const history = jobHistory.get(recordId);
+  if (history) {
+    return res.json({
+      ok: history.status !== "failed",
+      recordId,
+      status: history.status,
+      videoUrl,
+      error: history.error || null,
+      result: history.result || null,
+      createdAt: history.createdAt || null,
+      finishedAt: history.finishedAt || null
+    });
+  }
+
+  return res.json({
+    ok: true,
+    recordId,
+    status: "missing",
+    videoUrl,
+    notes: "No queued job, no finished job in memory, and no R2 object found."
+  });
+});
+
+app.get("/render/aitl-carousel-video/debug/:recordId", async (req, res) => {
+  const recordId = cleanText(req.params.recordId);
+  const videoUrl = getR2PublicUrl(recordId);
+  const queued = renderQueue.find((j) => j.recordId === recordId) || null;
+  const history = jobHistory.get(recordId) || null;
+  const exists = await r2ObjectExists(recordId);
+  return res.json({
+    ok: true,
+    recordId,
+    videoUrl,
+    r2Exists: exists,
+    queued,
+    history,
+    queueRunning,
+    queuedJobs: renderQueue.length,
+    timestamp: new Date().toISOString()
+  });
 });
 
 app.get("/slides/:recordId/:slideNumber.png", requireImageAccess, async (req, res) => {
