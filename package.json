@@ -1,7 +1,7 @@
 {
   "name": "aitl-carousel-renderer",
-  "version": "1.0.0",
-  "description": "AI Tool Logbook automated carousel PNG renderer without external image storage",
+  "version": "1.1.0",
+  "description": "AI Tool Logbook automated carousel PNG and MP4 renderer without external image storage",
   "main": "server.js",
   "type": "module",
   "scripts": {
@@ -11,6 +11,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "ffmpeg-static": "^5.2.0",
     "sharp": "^0.33.5"
   }
 }
