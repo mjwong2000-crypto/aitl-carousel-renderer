@@ -155,25 +155,50 @@ async function keyArtCover(url) {
 }
 
 function normalizeSource(fields = {}) {
-  const outputExcerpt = cleanText(fields["AITL Proof Output Excerpt"] || fields["AITL Actual Output"] || fields["AITL Test Result"] || fields["AITL Proof Raw Output"], "No output captured yet.");
+  const outputExcerpt = cleanText(fields["AITL Proof Output Excerpt"] || fields["AITL Actual Output"] || fields["AITL Test Result"] || fields["AITL Proof Raw Output"] || fields["Usable Output"], "No output captured yet.");
   const toolName = cleanText(fields["Tool Name"], "ChatGPT / OpenAI API");
+  const totalScore = cleanText(fields["AITL Total Score"], "0");
+  const reviewDecision = cleanText(fields["AITL Review Decision"], "");
+  const episodeCandidate = cleanText(fields["Episode Candidate?"], "");
+  const useItIf = cleanText(fields["Use It If"] || fields["AITL Use Bullets"], "");
+  const skipItIf = cleanText(fields["Skip It If"] || fields["AITL Skip Bullets"], "");
+  const proofLine = cleanText(fields["AITL Proof Line"] || fields["Downside"], "");
+  const takeaway = cleanText(fields["AITL Takeaway"], "");
+  const reframeLine = cleanText(fields["AITL Reframe Line"] || fields["Content Angle"], "");
+  const falseBelief = cleanText(fields["AITL False Belief"] || fields["Workflow Bottleneck"], "");
+  const ctaKeyword = cleanText(fields["CTA Keyword"] || fields["AITL CTA Keyword"], "RECEIPTS");
+  const verdictSource = fields["AITL Proof Verdict"] || fields["AITL Honest Verdict"] || "";
+  const fallbackVerdict = useItIf
+    ? `Use it if: ${useItIf}${skipItIf ? ` Skip it if: ${skipItIf}` : ""}`
+    : "Worth testing only if the proof matches your workflow.";
+
   return {
     toolName,
     title: cleanText(fields["Title"], "I tested an AI tool with a real workflow"),
     keyArtUrl: attachmentUrl(fields["AITL Video Key Art"]),
     reactionImageUrl: attachmentUrl(fields["AITL Reaction Image"]),
-    metric1Label: cleanText(fields["AITL Proof Metric 1 Label"], "Response time"),
-    metric1Value: cleanText(fields["AITL Proof Metric One Value"], "22.24s"),
-    metric2Label: cleanText(fields["AITL Proof Metric 2 Label"], "Output length"),
-    metric2Value: cleanText(fields["AITL Proof Metric Two Result"], "6651 chars"),
-    metric3Label: cleanText(fields["AITL Proof Metric Three Label"], "Usability score"),
-    metric3Value: cleanText(fields["AITL Proof Metric Three Result"], "10/10"),
-    proofInput: cleanText(fields["AITL Proof Input"] || fields["AITL Messy Input"], "Messy Facebook content framework"),
-    proofPrompt: cleanText(fields["AITL Proof Prompt"] || fields["AITL Test Prompt"], "Write a creator workflow test"),
+    metric1Label: cleanText(fields["AITL Proof Metric 1 Label"], "Score"),
+    metric1Value: cleanText(fields["AITL Proof Metric One Value"] || fields["AITL Proof Number"] || (totalScore ? `${totalScore}/30` : ""), totalScore ? `${totalScore}/30` : "n/a"),
+    metric2Label: cleanText(fields["AITL Proof Metric 2 Label"], "Creator fit"),
+    metric2Value: cleanText(fields["AITL Proof Metric Two Result"] || fields["Creator Fit Score"], fields["Creator Fit Score"] ? `${fields["Creator Fit Score"]}/10` : "n/a"),
+    metric3Label: cleanText(fields["AITL Proof Metric Three Label"], "Decision"),
+    metric3Value: cleanText(fields["AITL Proof Metric Three Result"] || reviewDecision || episodeCandidate, reviewDecision || "Maybe"),
+    proofInput: cleanText(fields["AITL Proof Input"] || fields["AITL Messy Input"] || fields["Creator Use Case"], "Messy creator workflow input"),
+    proofPrompt: cleanText(fields["AITL Proof Prompt"] || fields["AITL Test Prompt"] || fields["Creator Use Case"], "Write a creator workflow test"),
     rawOutput: cleanText(fields["AITL Proof Raw Output"], outputExcerpt),
     outputExcerpt,
-    verdict: cleanText(fields["AITL Proof Verdict"] || fields["AITL Honest Verdict"], "Worth testing with a real framework."),
-    caption: cleanText(fields["AITL Carousel Caption"], `${toolName} tested with real input and real API output.`)
+    verdict: cleanText(verdictSource, fallbackVerdict),
+    caption: cleanText(fields["AITL Carousel Caption"], `${toolName} tested with real input and real output.`),
+    totalScore,
+    reviewDecision,
+    episodeCandidate,
+    useItIf,
+    skipItIf,
+    proofLine,
+    takeaway,
+    reframeLine,
+    falseBelief,
+    ctaKeyword
   };
 }
 
@@ -227,81 +252,116 @@ function metricCard({ x, y, label, value, color, icon = "●" }) {
 async function buildSlides(source) {
   const outputLines = splitOutputLines(source.outputExcerpt || source.rawOutput, 8);
   const reactionData = await imageToDataUri(source.reactionImageUrl);
+
   const faceSvg = reactionData
     ? `<image href="${reactionData}" x="-170" y="165" width="650" height="1180" preserveAspectRatio="xMidYMid slice" opacity="1"/>
        <rect x="0" y="0" width="470" height="1920" fill="url(#bg)" opacity="0.05"/>`
     : `<rect x="0" y="210" width="430" height="990" rx="40" fill="#06121F" stroke="#38BDF8" stroke-width="4"/>
        ${textBlock({ text: "REACTION IMAGE", x: 215, y: 650, fontSize: 42, weight: 950, fill: "#38BDF8", maxChars: 16, maxLines: 2, anchor: "middle" })}`;
 
+  const tool = source.toolName || "this AI tool";
+  const lowerTool = String(tool).toLowerCase();
+  const isDesign = lowerTool.includes("canva") || lowerTool.includes("design") || lowerTool.includes("image");
+  const isApi = lowerTool.includes("api") || lowerTool.includes("openai") || lowerTool.includes("claude") || lowerTool.includes("groq") || lowerTool.includes("router");
+  const isAutomation = lowerTool.includes("n8n") || lowerTool.includes("workflow") || lowerTool.includes("automation");
+
+  const category = isDesign ? "design AI" : isApi ? "API tool" : isAutomation ? "automation tool" : "AI tool";
+  const pain = source.falseBelief || source.proofPrompt || source.proofInput || "Can this actually help a creator workflow?";
+  const usefulOutput = outputLines.find(line => line && !/no generated|not captured|homepage/i.test(line)) || source.outputExcerpt || source.rawOutput || "It produced a usable workflow answer.";
+  const useLine = source.useItIf || "you need a faster workflow without guessing";
+  const skipLine = source.skipItIf || source.proofLine || "the output does not match your real process";
+  const takeaway = source.takeaway || "The tool only matters if the result can survive a real workflow.";
+  const reframe = source.reframeLine || source.proofLine || "Real input. Real output. Real decision.";
+  const scoreNumber = Number(String(source.totalScore || "").replace(/[^\d.]/g, ""));
+  const quickVerdict = scoreNumber >= 26
+    ? "This is worth a real test."
+    : scoreNumber >= 22
+      ? "Useful, but I would not trust it blindly."
+      : "Not enough proof yet.";
+  const hookLine = isDesign
+    ? "I asked it to make something useful. Then the receipt got awkward."
+    : isApi
+      ? "I gave it a real workflow task. The answer was not the part that mattered."
+      : isAutomation
+        ? "I tested whether this could remove a real bottleneck."
+        : "I tested this like a creator would actually use it.";
+  const riskLine = source.proofLine || source.downside || "The danger is trusting a polished answer before checking the output.";
+  const ctaBody = `Comment another ${category}. I will test the result, not the sales page.`;
+  const ctaButton = source.ctaKeyword ? `COMMENT ${String(source.ctaKeyword).toUpperCase().slice(0, 18)}` : "COMMENT RECEIPTS";
+
   const slides = [];
 
-  slides.push(`${baseSvg(1, "REAL API TEST")}
+  slides.push(`${baseSvg(1, "REAL TEST")}
     ${faceSvg}
-    ${textBlock({ text: "I TESTED", x: 458, y: 432, fontSize: 112, weight: 950, fill: "#FFFFFF", maxChars: 9, maxLines: 1 })}
-    ${textBlock({ text: hardLimitText(source.toolName, 26), x: 458, y: 560, fontSize: 78, weight: 950, fill: "#38BDF8", maxChars: 15, maxLines: 2, lineHeight: 1.0 })}
-    ${textBlock({ text: "Not a homepage review.", x: 520, y: 828, fontSize: 32, weight: 900, fill: "#FFFFFF", maxChars: 24, maxLines: 1 })}
-    ${textBlock({ text: "Real prompt in. Real output out.", x: 520, y: 872, fontSize: 34, weight: 950, fill: "#22D3EE", maxChars: 31, maxLines: 1 })}
-    <rect x="430" y="930" width="590" height="430" rx="30" fill="#020617" stroke="#38BDF8" stroke-width="4" filter="url(#shadow)"/>
-    <rect x="430" y="930" width="590" height="60" rx="30" fill="#0F172A"/>
-    ${textBlock({ text: "OpenAI API", x: 930, y: 972, fontSize: 24, weight: 950, fill: "#FFFFFF", maxChars: 16, maxLines: 1, anchor: "end" })}
-    ${textBlock({ text: "PROMPT", x: 466, y: 1045, fontSize: 28, weight: 950, fill: "#22D3EE", maxChars: 10, maxLines: 1 })}
-    ${textBlock({ text: hardLimitText(source.proofPrompt, 74), x: 466, y: 1090, fontSize: 27, weight: 800, fill: "#E5E7EB", maxChars: 32, maxLines: 3, family: "Courier New, monospace" })}
-    ${textBlock({ text: "RESULT", x: 466, y: 1230, fontSize: 28, weight: 950, fill: "#84CC16", maxChars: 10, maxLines: 1 })}
-    ${textBlock({ text: hardLimitText(outputLines[0] || source.outputExcerpt, 95), x: 466, y: 1275, fontSize: 25, weight: 850, fill: "#A3E635", maxChars: 34, maxLines: 3, family: "Courier New, monospace" })}
-    ${metricCard({ x: 42, y: 1482, label: source.metric1Label, value: source.metric1Value, color: "#38BDF8", icon: "◷" })}
-    ${metricCard({ x: 380, y: 1482, label: source.metric2Label, value: source.metric2Value.replace(" chars",""), color: "#D946EF", icon: "▣" })}
-    ${metricCard({ x: 718, y: 1482, label: source.metric3Label, value: source.metric3Value, color: "#FACC15", icon: "☆" })}
+    ${textBlock({ text: "I TESTED", x: 458, y: 400, fontSize: 112, weight: 950, fill: "#FFFFFF", maxChars: 9, maxLines: 1 })}
+    ${textBlock({ text: hardLimitText(tool, 28), x: 458, y: 535, fontSize: 76, weight: 950, fill: "#38BDF8", maxChars: 15, maxLines: 2, lineHeight: 1.0 })}
+    ${textBlock({ text: hardLimitText(hookLine, 95), x: 505, y: 815, fontSize: 42, weight: 950, fill: "#FFFFFF", maxChars: 25, maxLines: 4, lineHeight: 1.03 })}
+    <rect x="430" y="1115" width="590" height="250" rx="34" fill="#020617" stroke="#D946EF" stroke-width="4" filter="url(#shadow)"/>
+    ${textBlock({ text: "NOT A REVIEW.", x: 725, y: 1200, fontSize: 46, weight: 950, fill: "#F0ABFC", maxChars: 14, maxLines: 1, anchor: "middle" })}
+    ${textBlock({ text: "A real workflow test.", x: 725, y: 1278, fontSize: 42, weight: 950, fill: "#FFFFFF", maxChars: 22, maxLines: 1, anchor: "middle" })}
+    ${metricCard({ x: 42, y: 1482, label: "Simple verdict", value: quickVerdict.includes("not") ? "SKIP?" : "TEST?", color: "#38BDF8", icon: "?" })}
+    ${metricCard({ x: 380, y: 1482, label: "Proof level", value: scoreNumber >= 26 ? "STRONG" : scoreNumber >= 22 ? "OK" : "WEAK", color: "#D946EF", icon: "!" })}
+    ${metricCard({ x: 718, y: 1482, label: "Risk", value: "CHECK", color: "#FACC15", icon: "⚠" })}
   ${closeSvg()}`);
 
-  slides.push(`${baseSvg(2, "PROMPT RECEIPT")}
-    ${textBlock({ text: "THE EXACT TEST", x: 90, y: 360, fontSize: 82, weight: 950, fill: "#FFFFFF", maxChars: 18, maxLines: 1 })}
-    <rect x="70" y="450" width="940" height="910" rx="36" fill="#020617" stroke="#38BDF8" stroke-width="4" filter="url(#shadow)"/>
-    ${textBlock({ text: hardLimitText(source.proofPrompt, 750), x: 115, y: 555, fontSize: 38, weight: 850, fill: "#E5E7EB", maxChars: 39, maxLines: 17, lineHeight: 1.12, family: "Courier New, monospace" })}
-    <rect x="90" y="1450" width="900" height="150" rx="36" fill="#092132" stroke="#38BDF8" stroke-width="3"/>
-    ${textBlock({ text: "No vibes. This is the actual prompt path.", x: 540, y: 1545, fontSize: 44, weight: 950, fill: "#22D3EE", maxChars: 34, maxLines: 1, anchor: "middle" })}
+  slides.push(`${baseSvg(2, "THE TASK")}
+    ${textBlock({ text: "THE REAL TASK", x: 90, y: 340, fontSize: 86, weight: 950, fill: "#FFFFFF", maxChars: 16, maxLines: 1 })}
+    ${textBlock({ text: "I did not ask: “is this tool cool?”", x: 90, y: 465, fontSize: 48, weight: 900, fill: "#F0ABFC", maxChars: 34, maxLines: 2 })}
+    <rect x="70" y="610" width="940" height="600" rx="40" fill="#020617" stroke="#38BDF8" stroke-width="5" filter="url(#shadow)"/>
+    ${textBlock({ text: hardLimitText(pain, 360), x: 125, y: 735, fontSize: 54, weight: 950, fill: "#FFFFFF", maxChars: 27, maxLines: 8, lineHeight: 1.02 })}
+    <rect x="95" y="1325" width="890" height="170" rx="40" fill="#092132" stroke="#22D3EE" stroke-width="4"/>
+    ${textBlock({ text: "If it cannot solve this, I do not care.", x: 540, y: 1433, fontSize: 46, weight: 950, fill: "#22D3EE", maxChars: 34, maxLines: 1, anchor: "middle" })}
   ${closeSvg()}`);
 
-  slides.push(`${baseSvg(3, "LIVE OUTPUT")}
-    ${textBlock({ text: "WHAT IT GAVE ME", x: 90, y: 350, fontSize: 78, weight: 950, fill: "#FFFFFF", maxChars: 17, maxLines: 1 })}
-    <rect x="70" y="440" width="940" height="980" rx="36" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="3"/>
-    ${outputLines.slice(0, 7).map((line, i) => `
-      <rect x="110" y="${520 + i * 110}" width="860" height="82" rx="20" fill="${i === 1 ? "#DCFCE7" : i % 2 ? "#EEF2FF" : "#FFFFFF"}" stroke="${i === 1 ? "#22C55E" : "#E2E8F0"}" stroke-width="3"/>
-      ${textBlock({ text: hardLimitText(line, 74), x: 145, y: 575 + i * 110, fontSize: 29, weight: i === 1 ? 950 : 830, fill: "#020617", maxChars: 39, maxLines: 1 })}
+  slides.push(`${baseSvg(3, "THE RECEIPT")}
+    ${textBlock({ text: "THE RECEIPT", x: 90, y: 330, fontSize: 88, weight: 950, fill: "#FFFFFF", maxChars: 13, maxLines: 1 })}
+    ${textBlock({ text: "This is the part that matters.", x: 90, y: 450, fontSize: 48, weight: 900, fill: "#38BDF8", maxChars: 32, maxLines: 1 })}
+    <rect x="70" y="550" width="940" height="860" rx="36" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="3"/>
+    ${outputLines.slice(0, 5).map((line, i) => `
+      <rect x="110" y="${640 + i * 132}" width="860" height="98" rx="22" fill="${i === 0 ? "#DCFCE7" : i % 2 ? "#EEF2FF" : "#FFFFFF"}" stroke="${i === 0 ? "#22C55E" : "#E2E8F0"}" stroke-width="3"/>
+      ${textBlock({ text: hardLimitText(line, 86), x: 145, y: 702 + i * 132, fontSize: 32, weight: i === 0 ? 950 : 830, fill: "#020617", maxChars: 38, maxLines: 2, lineHeight: 0.96 })}
     `).join("\n")}
     <rect x="110" y="1490" width="860" height="128" rx="34" fill="#052E16" stroke="#22C55E" stroke-width="5"/>
-    ${textBlock({ text: "ACTUAL OUTPUT. NOT A TOOL LIST.", x: 540, y: 1570, fontSize: 42, weight: 950, fill: "#86EFAC", maxChars: 31, maxLines: 1, anchor: "middle" })}
+    ${textBlock({ text: "IF THERE IS NO RECEIPT, THERE IS NO REVIEW.", x: 540, y: 1570, fontSize: 38, weight: 950, fill: "#86EFAC", maxChars: 40, maxLines: 1, anchor: "middle" })}
   ${closeSvg()}`);
 
-  slides.push(`${baseSvg(4, "BIG NUMBERS")}
-    ${textBlock({ text: source.metric1Value, x: 540, y: 560, fontSize: 190, weight: 950, fill: "#A3E635", maxChars: 10, maxLines: 1, anchor: "middle" })}
-    ${textBlock({ text: source.metric1Label.toUpperCase(), x: 540, y: 650, fontSize: 40, weight: 950, fill: "#FFFFFF", maxChars: 24, maxLines: 1, anchor: "middle" })}
-    ${textBlock({ text: source.metric2Value, x: 540, y: 1040, fontSize: 150, weight: 950, fill: "#38BDF8", maxChars: 15, maxLines: 1, anchor: "middle" })}
-    ${textBlock({ text: source.metric2Label.toUpperCase(), x: 540, y: 1120, fontSize: 40, weight: 950, fill: "#FFFFFF", maxChars: 24, maxLines: 1, anchor: "middle" })}
-    ${textBlock({ text: source.metric3Value, x: 540, y: 1450, fontSize: 170, weight: 950, fill: "#D946EF", maxChars: 10, maxLines: 1, anchor: "middle" })}
-    ${textBlock({ text: source.metric3Label.toUpperCase(), x: 540, y: 1535, fontSize: 40, weight: 950, fill: "#FFFFFF", maxChars: 24, maxLines: 1, anchor: "middle" })}
+  slides.push(`${baseSvg(4, "PLAIN ENGLISH")}
+    ${textBlock({ text: "EXPLAIN IT LIKE I’M 10", x: 540, y: 320, fontSize: 72, weight: 950, fill: "#FFFFFF", maxChars: 24, maxLines: 2, anchor: "middle", lineHeight: 0.95 })}
+    <rect x="90" y="500" width="900" height="310" rx="42" fill="#020617" stroke="#A3E635" stroke-width="6" filter="url(#shadow)"/>
+    ${textBlock({ text: "Did it help?", x: 140, y: 620, fontSize: 68, weight: 950, fill: "#A3E635", maxChars: 14, maxLines: 1 })}
+    ${textBlock({ text: scoreNumber >= 22 ? "Yes — it gave something I could actually use." : "Not enough to trust yet.", x: 140, y: 720, fontSize: 45, weight: 900, fill: "#FFFFFF", maxChars: 33, maxLines: 2, lineHeight: 1.0 })}
+    <rect x="90" y="900" width="900" height="310" rx="42" fill="#020617" stroke="#38BDF8" stroke-width="6" filter="url(#shadow)"/>
+    ${textBlock({ text: "What is the catch?", x: 140, y: 1020, fontSize: 58, weight: 950, fill: "#38BDF8", maxChars: 20, maxLines: 1 })}
+    ${textBlock({ text: hardLimitText(riskLine, 135), x: 140, y: 1110, fontSize: 40, weight: 900, fill: "#FFFFFF", maxChars: 36, maxLines: 3, lineHeight: 1.0 })}
+    <rect x="90" y="1300" width="900" height="210" rx="42" fill="#111827" stroke="#FACC15" stroke-width="6"/>
+    ${textBlock({ text: quickVerdict, x: 540, y: 1428, fontSize: 48, weight: 950, fill: "#FACC15", maxChars: 31, maxLines: 2, anchor: "middle", lineHeight: 0.95 })}
   ${closeSvg()}`);
 
-  slides.push(`${baseSvg(5, "VERDICT")}
-    ${textBlock({ text: "WOULD I USE THIS?", x: 540, y: 390, fontSize: 84, weight: 950, fill: "#FFFFFF", maxChars: 22, maxLines: 1, anchor: "middle" })}
-    <rect x="90" y="510" width="900" height="520" rx="42" fill="#020617" stroke="#22C55E" stroke-width="6" filter="url(#shadow)"/>
-    ${textBlock({ text: hardLimitText(source.verdict, 310), x: 140, y: 620, fontSize: 48, weight: 900, fill: "#E5E7EB", maxChars: 31, maxLines: 7, lineHeight: 1.1 })}
-    <rect x="100" y="1180" width="880" height="180" rx="46" fill="#111827" stroke="#FACC15" stroke-width="5"/>
-    ${textBlock({ text: "YES — WITH A REAL FRAMEWORK", x: 540, y: 1292, fontSize: 54, weight: 950, fill: "#FACC15", maxChars: 28, maxLines: 1, anchor: "middle" })}
+  slides.push(`${baseSvg(5, "USE OR SKIP")}
+    ${textBlock({ text: "USE IT OR SKIP IT?", x: 540, y: 330, fontSize: 80, weight: 950, fill: "#FFFFFF", maxChars: 21, maxLines: 1, anchor: "middle" })}
+    <rect x="90" y="500" width="900" height="350" rx="42" fill="#052E16" stroke="#22C55E" stroke-width="6" filter="url(#shadow)"/>
+    ${textBlock({ text: "USE IT IF", x: 140, y: 610, fontSize: 48, weight: 950, fill: "#86EFAC", maxChars: 12, maxLines: 1 })}
+    ${textBlock({ text: hardLimitText(useLine, 170), x: 140, y: 710, fontSize: 43, weight: 900, fill: "#FFFFFF", maxChars: 34, maxLines: 3, lineHeight: 1.02 })}
+    <rect x="90" y="965" width="900" height="350" rx="42" fill="#450A0A" stroke="#FB7185" stroke-width="6" filter="url(#shadow)"/>
+    ${textBlock({ text: "SKIP IT IF", x: 140, y: 1075, fontSize: 48, weight: 950, fill: "#FDA4AF", maxChars: 12, maxLines: 1 })}
+    ${textBlock({ text: hardLimitText(skipLine, 170), x: 140, y: 1175, fontSize: 43, weight: 900, fill: "#FFFFFF", maxChars: 34, maxLines: 3, lineHeight: 1.02 })}
+    <rect x="100" y="1450" width="880" height="120" rx="42" fill="#111827" stroke="#FACC15" stroke-width="5"/>
+    ${textBlock({ text: scoreNumber >= 22 ? "GOOD TOOL. STILL NEEDS CHECKING." : "NOT ENOUGH PROOF.", x: 540, y: 1526, fontSize: 38, weight: 950, fill: "#FACC15", maxChars: 34, maxLines: 1, anchor: "middle" })}
   ${closeSvg()}`);
 
-  slides.push(`${baseSvg(6, "SAVE THIS")}
-    ${textBlock({ text: "THE RULE", x: 540, y: 400, fontSize: 96, weight: 950, fill: "#38BDF8", maxChars: 10, maxLines: 1, anchor: "middle" })}
-    ${textBlock({ text: "AI tools are only interesting when the receipts are visible.", x: 100, y: 600, fontSize: 74, weight: 950, fill: "#FFFFFF", maxChars: 22, maxLines: 4, lineHeight: 1.04 })}
+  slides.push(`${baseSvg(6, "THE RULE")}
+    ${textBlock({ text: "THE RULE", x: 540, y: 380, fontSize: 100, weight: 950, fill: "#38BDF8", maxChars: 10, maxLines: 1, anchor: "middle" })}
+    ${textBlock({ text: hardLimitText(takeaway, 210), x: 100, y: 610, fontSize: 62, weight: 950, fill: "#FFFFFF", maxChars: 25, maxLines: 5, lineHeight: 1.04 })}
     <rect x="100" y="1230" width="880" height="250" rx="42" fill="#020617" stroke="#D946EF" stroke-width="5"/>
-    ${textBlock({ text: "real input → real output → real verdict", x: 540, y: 1375, fontSize: 46, weight: 950, fill: "#F0ABFC", maxChars: 34, maxLines: 1, anchor: "middle" })}
+    ${textBlock({ text: hardLimitText(reframe, 115), x: 540, y: 1368, fontSize: 38, weight: 950, fill: "#F0ABFC", maxChars: 34, maxLines: 3, anchor: "middle", lineHeight: 1.0 })}
   ${closeSvg()}`);
 
   slides.push(`${baseSvg(7, "NEXT TEST")}
-    ${textBlock({ text: "WHICH AI TOOL NEXT?", x: 540, y: 520, fontSize: 82, weight: 950, fill: "#FFFFFF", maxChars: 22, maxLines: 2, anchor: "middle" })}
-    <rect x="120" y="760" width="840" height="320" rx="42" fill="#020617" stroke="#38BDF8" stroke-width="5"/>
-    ${textBlock({ text: "Comment the tool. I will test it with a real workflow, not a homepage review.", x: 170, y: 880, fontSize: 52, weight: 900, fill: "#E5E7EB", maxChars: 28, maxLines: 4, lineHeight: 1.08 })}
-    <rect x="170" y="1240" width="740" height="140" rx="70" fill="#FFFFFF"/>
-    ${textBlock({ text: "FULL RECEIPTS LINKED", x: 540, y: 1332, fontSize: 48, weight: 950, fill: "#020617", maxChars: 24, maxLines: 1, anchor: "middle" })}
+    ${textBlock({ text: "WHAT SHOULD I TEST NEXT?", x: 540, y: 470, fontSize: 76, weight: 950, fill: "#FFFFFF", maxChars: 26, maxLines: 2, anchor: "middle", lineHeight: 0.95 })}
+    <rect x="120" y="725" width="840" height="320" rx="42" fill="#020617" stroke="#38BDF8" stroke-width="5"/>
+    ${textBlock({ text: ctaBody, x: 170, y: 845, fontSize: 49, weight: 900, fill: "#E5E7EB", maxChars: 29, maxLines: 4, lineHeight: 1.06 })}
+    <rect x="170" y="1170" width="740" height="132" rx="66" fill="#FFFFFF"/>
+    ${textBlock({ text: ctaButton, x: 540, y: 1258, fontSize: 48, weight: 950, fill: "#020617", maxChars: 22, maxLines: 1, anchor: "middle" })}
   ${closeSvg()}`);
 
   return slides;
@@ -389,7 +449,7 @@ async function renderMp4ForRecord(recordId) {
       slidePaths.push(slidePath);
     }
 
-    const durations = [1.8, 3.2, 4.2, 3.2, 3.5, 3.2, 3.2];
+    const durations = [1.8, 3.0, 4.0, 3.0, 2.8, 2.8, 2.6];
     let concatText = "";
     for (let i = 0; i < slidePaths.length; i++) {
       concatText += `file '${slidePaths[i].replace(/'/g, "'\\''")}'\n`;
@@ -472,12 +532,12 @@ app.get("/health", (req, res) => {
     r2Configured: Boolean(r2Client && R2_PUBLIC_BASE_URL && R2_BUCKET),
     bucket: R2_BUCKET,
     cloudinary: false,
-    layout: "proof-footage-v2-face-locked-hardwired",
+    layout: "proof-footage-v5-human-stakes-face-locked",
     video: "ffmpeg-r2-proof-footage-v2-face-locked",
     dimensions: `${OUTPUT_WIDTH}x${OUTPUT_HEIGHT}`,
     designCanvas: `${WIDTH}x${HEIGHT}`,
     r2KeyPrefix: R2_PREFIX,
-    renderMode: HARDLOCKED_RENDER_MODE,
+    renderMode: "proof-footage-v5-human-stakes-no-dead-metrics",
     queueRunning,
     queuedJobs: renderQueue.length,
     ffmpegPath: Boolean(ffmpegPath),
