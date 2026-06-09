@@ -555,10 +555,28 @@ async function r2Exists(key) {
 
 
 async function downloadImageToBuffer(url) {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Hero image download failed: ${response.status} ${await response.text()}`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+
+  let response;
+  try {
+    response = await fetch(url, { signal: controller.signal });
+  } catch (error) {
+    throw new Error(`Hero image fetch timed out or failed. URL: ${url}. Error: ${error.message}`);
+  } finally {
+    clearTimeout(timeout);
   }
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Hero image URL is not a downloadable public image. HTTP ${response.status}. URL: ${url}. Body: ${body.slice(0, 300)}`);
+  }
+
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.toLowerCase().includes("image")) {
+    throw new Error(`Hero image URL did not return an image. Content-Type: ${contentType}. URL: ${url}`);
+  }
+
   return Buffer.from(await response.arrayBuffer());
 }
 
@@ -723,11 +741,11 @@ app.get("/health", (req, res) => {
     r2Configured: !!r2Client(),
     airtableConfigured: !!AIRTABLE_TOKEN,
     bucket: R2_BUCKET,
-    layout: "prompt-pack-v10-hero-first-carousel",
+    layout: "prompt-pack-v10-hero-first-hotfix-timeout",
     video: "carousel-png-html-no-ffmpeg",
     dimensions: "1080x1350 carousel slides",
     r2KeyPrefix: R2_PREFIX,
-    renderMode: "prompt-pack-v10-approved-hero-slide-1-only",
+    renderMode: "prompt-pack-v10-approved-hero-slide-1-timeout-reset",
     queueRunning: false,
     queuedJobs: 0,
     ffmpegPath: false,
@@ -811,6 +829,12 @@ app.post("/render/aitl-prompt-pack-video", async (req, res) => {
   }
 });
 
+function isStaleRenderingJob(job) {
+  if (!job || job.status !== "rendering" || !job.createdAt) return false;
+  const ageMs = Date.now() - Date.parse(job.createdAt);
+  return Number.isFinite(ageMs) && ageMs > 180000;
+}
+
 app.get("/render/aitl-prompt-pack-video/status/:recordId", async (req, res) => {
   const recordId = req.params.recordId;
   const htmlKey = `${R2_PREFIX}/${recordId}/carousel.html`;
@@ -822,6 +846,22 @@ app.get("/render/aitl-prompt-pack-video/status/:recordId", async (req, res) => {
 
   const job = jobs.get(recordId);
   if (job) {
+    if (isStaleRenderingJob(job)) {
+      const stale = {
+        ok: false,
+        recordId,
+        status: "failed",
+        error: "Stale rendering job timed out after 3 minutes. Redeploy cleared old memory state; rerun renderer to trigger one clean render.",
+        videoUrl: htmlUrl,
+        staleJob: job,
+        attempt: renderAttempts.get(recordId) || null,
+        updatedAt: new Date().toISOString()
+      };
+      jobs.set(recordId, stale);
+      renderErrors.set(recordId, stale);
+      return res.json(stale);
+    }
+
     return res.json(job);
   }
 
@@ -840,6 +880,27 @@ app.get("/render/aitl-prompt-pack-video/status/:recordId", async (req, res) => {
   });
 });
 
+app.post("/debug/prompt-pack/reset", (req, res) => {
+  const key = req.headers["x-render-key"];
+  if (key !== SERVER_RENDER_KEY) {
+    return res.status(401).json({ ok: false, error: "Unauthorized" });
+  }
+
+  const recordId = req.body?.recordId;
+
+  if (recordId) {
+    jobs.delete(recordId);
+    renderErrors.delete(recordId);
+    renderAttempts.delete(recordId);
+    return res.json({ ok: true, reset: "single", recordId });
+  }
+
+  jobs.clear();
+  renderErrors.clear();
+  renderAttempts.clear();
+  return res.json({ ok: true, reset: "all" });
+});
+
 app.get("/debug/prompt-pack/:recordId", (req, res) => {
   const recordId = req.params.recordId;
   res.json({
@@ -853,5 +914,5 @@ app.get("/debug/prompt-pack/:recordId", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`AI Tool Logbook Prompt Pack Renderer V10 hero first running on port ${PORT}`);
+  console.log(`AI Tool Logbook Prompt Pack Renderer V10 hero first HOTFIX running on port ${PORT}`);
 });
