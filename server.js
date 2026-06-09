@@ -260,135 +260,195 @@ async function buildSlides(source) {
       .replace(/\s*for text-only.*$/i, "")
       .replace(/Google Search API/i, "Search API")
       .replace(/Responses API/i, "OpenAI API")
+      .replace(/Serverless/gi, "")
+      .replace(/text embeddings/gi, "memory search")
+      .replace(/retrieval|RAG-lite/gi, "finding old notes")
       .replace(/\s+/g, " ")
       .trim();
   }
 
-  function readableOutput(raw) {
-    const cleaned = String(raw || "")
-      .replace(/\{|\}|\[|\]|"|#/g, "")
-      .replace(/\bJSON field\b/gi, "answer")
-      .replace(/\bAPI response\b/gi, "result")
-      .replace(/\btext-only\b/gi, "written")
-      .replace(/\bcited sources\/quoted snippets\b/gi, "sources")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    if (!cleaned || /no generated|not captured|no output|homepage/i.test(cleaned)) {
-      return "No real receipt showed up. That means I would not recommend it yet.";
-    }
-
-    return cleaned;
-  }
-
-  const outputLines = splitOutputLines(readableOutput(source.outputExcerpt || source.rawOutput), 8);
   const rawTool = source.toolName || "this AI tool";
   const tool = shortToolName(rawTool);
   const lowerTool = String(rawTool).toLowerCase();
 
   const isPerplexity = lowerTool.includes("perplexity");
   const isSearch = lowerTool.includes("serp") || lowerTool.includes("serper") || lowerTool.includes("search api");
-  const isOpenAIJson = lowerTool.includes("openai") && lowerTool.includes("json");
+  const isOpenAIJson = lowerTool.includes("openai") && (lowerTool.includes("json") || lowerTool.includes("responses"));
   const isOpenAI = lowerTool.includes("openai") || lowerTool.includes("chatgpt");
   const isAutomation = lowerTool.includes("n8n") || lowerTool.includes("workflow") || lowerTool.includes("automation");
+  const isVoice = lowerTool.includes("elevenlabs") || lowerTool.includes("voice") || lowerTool.includes("audio");
   const isDesign = lowerTool.includes("canva") || lowerTool.includes("design") || lowerTool.includes("image");
+  const isBackend = lowerTool.includes("pinecone") || lowerTool.includes("embedding") || lowerTool.includes("vector") || lowerTool.includes("rag") || lowerTool.includes("serverless");
 
-  let story = {
+  let s = {
     category: "AI tool",
-    coldOpen: "I tested this with a real creator problem.",
-    stakes: "Can it save time without making me look lazy?",
-    job: "I gave it one job: turn messy work into something I could actually use.",
-    receipt: outputLines[0] || "It gave a usable result, but I still had to check it.",
-    why: "A tool is only useful if it helps me publish better work faster.",
-    danger: "The danger is trusting a polished answer before checking it.",
+    hook: "Can this actually help me publish faster?",
+    job1: "Fix one messy task",
+    job2: "Give a usable result",
+    job3: "Save real time",
+    exampleBefore: "Before: messy idea sitting in notes.",
+    exampleAfter: "After: a clear next step I can use.",
+    pass1: "Useful output",
+    pass2: "Clear next step",
+    pass3: "Needs checking",
+    payoff: "This only matters if it helps you publish better work faster.",
     use: "you need a faster first draft",
     skip: "you expect perfect work with zero review",
     verdict: "Useful helper. Not an autopilot.",
+    danger: "The danger is trusting a polished answer before checking it.",
     comment: "Comment another AI tool. I will test the result, not the sales page."
   };
 
-  if (isPerplexity) {
-    story = {
+  if (isBackend) {
+    s = {
+      category: "backend AI",
+      hook: "Can this help an AI remember my old content?",
+      job1: "Store old notes",
+      job2: "Find the right memory",
+      job3: "Stop repeated research",
+      exampleBefore: "Before: I lose a good idea in 300 notes.",
+      exampleAfter: "After: the system finds the matching note.",
+      pass1: "Good for memory",
+      pass2: "Bad for beginners",
+      pass3: "Needs setup",
+      payoff: "This is powerful for builders, but boring for casual viewers.",
+      use: "you are building a serious AI workflow",
+      skip: "you just want a simple creator tool",
+      verdict: "Useful tech. Weak viral topic.",
+      danger: "If the audience cannot understand it fast, it should not be a Short.",
+      comment: "Comment a tool normal creators actually use."
+    };
+  } else if (isPerplexity) {
+    s = {
       category: "research AI",
-      coldOpen: "I tested Perplexity like a fact-checker.",
-      stakes: "Can it stop me from posting fake AI advice?",
-      job: "I gave it one job: find sources before I trust a claim.",
-      receipt: "It gave an answer with sources I could check.",
-      why: "That matters because one fake claim can make the whole channel look lazy.",
-      danger: "Citations are not automatic truth. You still have to open them.",
-      use: "you need receipts before quoting a trend, stat, price, or claim",
+      hook: "Can it stop me from posting fake AI advice?",
+      job1: "Check the claim",
+      job2: "Show sources",
+      job3: "Protect my trust",
+      exampleBefore: "Before: “This AI tool is exploding.”",
+      exampleAfter: "After: sources I can open and verify.",
+      pass1: "Sources shown",
+      pass2: "Fast research",
+      pass3: "Still verify",
+      payoff: "One fake claim makes the whole channel look lazy.",
+      use: "you quote trends, prices, stats, or claims",
       skip: "you want the tool to think for you",
       verdict: "Good for receipts. Bad for lazy research.",
+      danger: "Citations are not automatic truth. Open the source.",
       comment: "Comment another research AI. I will test if the sources are real."
     };
   } else if (isSearch) {
-    story = {
+    s = {
       category: "search tool",
-      coldOpen: "I tested this like a receipts machine.",
-      stakes: "Can it stop me from repeating fake claims?",
-      job: "I gave it one job: bring back proof before I use a claim in a video.",
-      receipt: "It brought back search evidence I could check.",
-      why: "That matters because viewers trust receipts, not guesses.",
-      danger: "It finds links. It does not decide what is true.",
-      use: "you need proof before quoting a trend, price, or benchmark",
-      skip: "you want a finished opinion without checking sources",
+      hook: "Can it find receipts before I post?",
+      job1: "Find proof",
+      job2: "Return source links",
+      job3: "Save research time",
+      exampleBefore: "Before: guessing if a claim is real.",
+      exampleAfter: "After: links I can check before publishing.",
+      pass1: "Receipts found",
+      pass2: "Research faster",
+      pass3: "Still judge source",
+      payoff: "Receipts turn a random opinion into content people trust.",
+      use: "you need proof before quoting a trend",
+      skip: "you want a final opinion without checking",
       verdict: "Useful for receipts. Not a brain replacement.",
+      danger: "It finds links. It does not decide what is true.",
       comment: "Comment another search tool. I will test if it finds real proof."
     };
   } else if (isOpenAIJson) {
-    story = {
+    s = {
       category: "API tool",
-      coldOpen: "I tested OpenAI JSON mode where workflows usually break.",
-      stakes: "Can it turn messy ideas into clean fields?",
-      job: "I gave it one job: return structure my automation could actually use.",
-      receipt: "It returned organized fields instead of a messy paragraph.",
-      why: "That matters because bad formatting breaks Airtable, n8n, and video scripts.",
-      danger: "Clean JSON still needs rules. Weak prompts still create weak output.",
-      use: "you need clean fields for Airtable, n8n, scripts, or batch content",
-      skip: "you expect perfect structure from a vague prompt",
-      verdict: "Useful for automation. Not magic.",
+      hook: "Can it stop my automation from breaking?",
+      job1: "Take messy input",
+      job2: "Return clean fields",
+      job3: "Feed the next workflow",
+      exampleBefore: "Before: messy paragraph.",
+      exampleAfter: "After: title, hook, CTA, scenes.",
+      pass1: "Clean fields",
+      pass2: "Workflow-ready",
+      pass3: "Prompt matters",
+      payoff: "Clean fields mean less manual fixing and faster publishing.",
+      use: "you build Airtable, n8n, scripts, or batch content",
+      skip: "your prompt is vague and you expect perfection",
+      verdict: "Strong for automation. Not magic.",
+      danger: "Bad prompts still make bad structure.",
       comment: "Comment another API tool. I will test if it survives automation."
     };
   } else if (isOpenAI) {
-    story = {
+    s = {
       category: "writing AI",
-      coldOpen: "I tested ChatGPT like a tired creator at midnight.",
-      stakes: "Can it turn a messy idea into something usable?",
-      job: "I gave it one job: make the next step clearer, faster, and usable.",
-      receipt: readableOutput(source.outputExcerpt || source.rawOutput).slice(0, 135),
-      why: "That matters because speed means nothing if the answer still needs rebuilding.",
-      danger: "Fast answers are not finished work.",
-      use: "you need a strong first draft or structure",
-      skip: "you do not want to review, edit, or fact-check",
+      hook: "Can it turn a messy idea into a usable video?",
+      job1: "Clean up the idea",
+      job2: "Make the hook stronger",
+      job3: "Give a usable script",
+      exampleBefore: "Before: random idea in my notes.",
+      exampleAfter: "After: hook, structure, next action.",
+      pass1: "Draft usable",
+      pass2: "Needs editing",
+      pass3: "Saves time",
+      payoff: "Speed only matters if the draft is worth editing.",
+      use: "you need a strong first draft",
+      skip: "you will not edit or fact-check",
       verdict: "Good helper. Not an autopilot.",
+      danger: "Fast answers are not finished work.",
       comment: "Comment another prompt test. I will show the real output."
     };
   } else if (isAutomation) {
-    story = {
+    s = {
       category: "automation tool",
-      coldOpen: "I tested this like a task I hate doing twice.",
-      stakes: "Can it remove one boring manual step?",
-      job: "I gave it one job: move work forward without me clicking everything.",
-      receipt: "It showed whether the workflow could connect the next step.",
-      why: "That matters because repeated clicks steal hours every week.",
-      danger: "Automation only works when the inputs are clean.",
-      use: "you repeat the same task over and over",
+      hook: "Can it remove a task I hate doing twice?",
+      job1: "Stop copy-paste",
+      job2: "Move data cleanly",
+      job3: "Save daily clicks",
+      exampleBefore: "Before: copy, paste, fix, repeat.",
+      exampleAfter: "After: one step pushes the next step.",
+      pass1: "Less clicking",
+      pass2: "Repeatable",
+      pass3: "Clean inputs",
+      payoff: "Every repeated click is a tax on the business.",
+      use: "you repeat the same task every day",
       skip: "your process changes every time",
       verdict: "Worth testing if the task repeats.",
+      danger: "Automation breaks when messy data gets in.",
       comment: "Comment another automation tool. I will test if it saves real clicks."
     };
+  } else if (isVoice) {
+    s = {
+      category: "voice AI",
+      hook: "Can it make a voice people keep listening to?",
+      job1: "Sound clear",
+      job2: "Avoid robot voice",
+      job3: "Add emotion",
+      exampleBefore: "Before: flat robotic narration.",
+      exampleAfter: "After: voice with pace and feeling.",
+      pass1: "Clear voice",
+      pass2: "More human",
+      pass3: "Needs direction",
+      payoff: "Bad voice kills retention before the hook lands.",
+      use: "you need fast voiceovers with emotion",
+      skip: "you need perfect acting with no direction",
+      verdict: "Good voice needs good direction.",
+      danger: "A clean voice can still feel dead.",
+      comment: "Comment another voice AI. I will test if it sounds human."
+    };
   } else if (isDesign) {
-    story = {
+    s = {
       category: "design AI",
-      coldOpen: "I tested this like I was about to post it.",
-      stakes: "Can it make something I would actually publish?",
-      job: "I gave it one job: create a design result worth showing.",
-      receipt: readableOutput(source.outputExcerpt || source.rawOutput),
-      why: "That matters because pretty demos do not equal usable content.",
-      danger: "If I cannot see the generated design, there is no proof.",
-      use: "you can compare the actual design output",
-      skip: "you only have claims, not a captured result",
+      hook: "Can it make something I would actually post?",
+      job1: "Make a design",
+      job2: "Stop the scroll",
+      job3: "Need less fixing",
+      exampleBefore: "Before: blank design page.",
+      exampleAfter: "After: something worth showing.",
+      pass1: "Looks good",
+      pass2: "Needs proof",
+      pass3: "Capture output",
+      payoff: "Pretty demos mean nothing unless the output is usable.",
+      use: "you can compare the actual generated design",
+      skip: "you only have claims, not the result",
       verdict: "No receipt, no recommendation.",
+      danger: "If I cannot see the design, there is no proof.",
       comment: "Comment another design AI. I will test the actual output."
     };
   }
@@ -401,64 +461,73 @@ async function buildSlides(source) {
 
   const slides = [];
 
-  slides.push(`${baseSvg(1, "THE HOOK")}
+  slides.push(`${baseSvg(1, "COLD OPEN")}
     ${faceSvg}
-    ${textBlock({ text: "I TESTED", x: 458, y: 370, fontSize: 105, weight: 950, fill: "#FFFFFF", maxChars: 9, maxLines: 1 })}
-    ${textBlock({ text: hardLimitText(tool, 23), x: 458, y: 505, fontSize: 80, weight: 950, fill: "#38BDF8", maxChars: 15, maxLines: 2, lineHeight: 0.98 })}
-    <rect x="430" y="770" width="590" height="470" rx="38" fill="#020617" stroke="#D946EF" stroke-width="5" filter="url(#shadow)"/>
-    ${textBlock({ text: hardLimitText(story.stakes, 105), x: 470, y: 915, fontSize: 62, weight: 950, fill: "#FFFFFF", maxChars: 20, maxLines: 4, lineHeight: 0.96 })}
-    <rect x="470" y="1320" width="510" height="108" rx="54" fill="#FFFFFF"/>
-    ${textBlock({ text: "REAL TEST. NO HYPE.", x: 725, y: 1390, fontSize: 34, weight: 950, fill: "#020617", maxChars: 19, maxLines: 1, anchor: "middle" })}
+    ${textBlock({ text: "I TESTED", x: 458, y: 365, fontSize: 105, weight: 950, fill: "#FFFFFF", maxChars: 9, maxLines: 1 })}
+    ${textBlock({ text: hardLimitText(tool, 22), x: 458, y: 500, fontSize: 80, weight: 950, fill: "#38BDF8", maxChars: 15, maxLines: 2, lineHeight: 0.98 })}
+    <rect x="430" y="760" width="590" height="500" rx="40" fill="#020617" stroke="#D946EF" stroke-width="5" filter="url(#shadow)"/>
+    ${textBlock({ text: hardLimitText(s.hook, 100), x: 470, y: 910, fontSize: 64, weight: 950, fill: "#FFFFFF", maxChars: 19, maxLines: 4, lineHeight: 0.95 })}
+    <rect x="470" y="1325" width="510" height="108" rx="54" fill="#FFFFFF"/>
+    ${textBlock({ text: "REAL TEST. NO HYPE.", x: 725, y: 1395, fontSize: 34, weight: 950, fill: "#020617", maxChars: 19, maxLines: 1, anchor: "middle" })}
   ${closeSvg()}`);
 
-  slides.push(`${baseSvg(2, "THE SETUP")}
-    ${textBlock({ text: "HERE’S THE TEST", x: 90, y: 330, fontSize: 86, weight: 950, fill: "#FFFFFF", maxChars: 17, maxLines: 1 })}
-    <rect x="70" y="500" width="940" height="610" rx="44" fill="#020617" stroke="#38BDF8" stroke-width="5" filter="url(#shadow)"/>
-    ${textBlock({ text: hardLimitText(story.job, 205), x: 125, y: 690, fontSize: 66, weight: 950, fill: "#FFFFFF", maxChars: 24, maxLines: 5, lineHeight: 0.95 })}
-    <rect x="95" y="1280" width="890" height="180" rx="44" fill="#111827" stroke="#FACC15" stroke-width="5"/>
-    ${textBlock({ text: "If it fails this, I skip it.", x: 540, y: 1395, fontSize: 54, weight: 950, fill: "#FACC15", maxChars: 28, maxLines: 1, anchor: "middle" })}
+  slides.push(`${baseSvg(2, "THREE JOBS")}
+    ${textBlock({ text: "I GAVE IT 3 JOBS", x: 540, y: 320, fontSize: 82, weight: 950, fill: "#FFFFFF", maxChars: 19, maxLines: 1, anchor: "middle" })}
+    <rect x="90" y="500" width="900" height="260" rx="46" fill="#020617" stroke="#38BDF8" stroke-width="6" filter="url(#shadow)"/>
+    ${textBlock({ text: "1", x: 155, y: 665, fontSize: 110, weight: 950, fill: "#38BDF8", maxChars: 2, maxLines: 1 })}
+    ${textBlock({ text: hardLimitText(s.job1, 55), x: 275, y: 655, fontSize: 60, weight: 950, fill: "#FFFFFF", maxChars: 20, maxLines: 2, lineHeight: 0.95 })}
+    <rect x="90" y="820" width="900" height="260" rx="46" fill="#020617" stroke="#A3E635" stroke-width="6" filter="url(#shadow)"/>
+    ${textBlock({ text: "2", x: 155, y: 985, fontSize: 110, weight: 950, fill: "#A3E635", maxChars: 2, maxLines: 1 })}
+    ${textBlock({ text: hardLimitText(s.job2, 55), x: 275, y: 975, fontSize: 60, weight: 950, fill: "#FFFFFF", maxChars: 20, maxLines: 2, lineHeight: 0.95 })}
+    <rect x="90" y="1140" width="900" height="260" rx="46" fill="#020617" stroke="#FACC15" stroke-width="6" filter="url(#shadow)"/>
+    ${textBlock({ text: "3", x: 155, y: 1305, fontSize: 110, weight: 950, fill: "#FACC15", maxChars: 2, maxLines: 1 })}
+    ${textBlock({ text: hardLimitText(s.job3, 55), x: 275, y: 1295, fontSize: 60, weight: 950, fill: "#FFFFFF", maxChars: 20, maxLines: 2, lineHeight: 0.95 })}
   ${closeSvg()}`);
 
-  slides.push(`${baseSvg(3, "THE RECEIPT")}
-    ${textBlock({ text: "THE RECEIPT", x: 90, y: 330, fontSize: 88, weight: 950, fill: "#FFFFFF", maxChars: 13, maxLines: 1 })}
-    <rect x="70" y="500" width="940" height="650" rx="42" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="3"/>
-    ${textBlock({ text: hardLimitText(story.receipt, 175), x: 125, y: 705, fontSize: 64, weight: 950, fill: "#020617", maxChars: 22, maxLines: 5, lineHeight: 0.95 })}
-    <rect x="100" y="1270" width="880" height="205" rx="44" fill="#052E16" stroke="#22C55E" stroke-width="6"/>
-    ${textBlock({ text: "This is what came back.", x: 540, y: 1395, fontSize: 54, weight: 950, fill: "#86EFAC", maxChars: 28, maxLines: 1, anchor: "middle" })}
+  slides.push(`${baseSvg(3, "REAL EXAMPLE")}
+    ${textBlock({ text: "REAL EXAMPLE", x: 540, y: 315, fontSize: 86, weight: 950, fill: "#FFFFFF", maxChars: 14, maxLines: 1, anchor: "middle" })}
+    <rect x="85" y="485" width="910" height="390" rx="46" fill="#450A0A" stroke="#FB7185" stroke-width="6"/>
+    ${textBlock({ text: "BEFORE", x: 140, y: 600, fontSize: 44, weight: 950, fill: "#FDA4AF", maxChars: 8, maxLines: 1 })}
+    ${textBlock({ text: hardLimitText(s.exampleBefore, 115), x: 140, y: 720, fontSize: 58, weight: 950, fill: "#FFFFFF", maxChars: 23, maxLines: 3, lineHeight: 0.95 })}
+    <rect x="85" y="995" width="910" height="390" rx="46" fill="#052E16" stroke="#22C55E" stroke-width="6"/>
+    ${textBlock({ text: "AFTER", x: 140, y: 1110, fontSize: 44, weight: 950, fill: "#86EFAC", maxChars: 8, maxLines: 1 })}
+    ${textBlock({ text: hardLimitText(s.exampleAfter, 115), x: 140, y: 1230, fontSize: 58, weight: 950, fill: "#FFFFFF", maxChars: 23, maxLines: 3, lineHeight: 0.95 })}
   ${closeSvg()}`);
 
-  slides.push(`${baseSvg(4, "WHY IT MATTERS")}
-    ${textBlock({ text: "WHY IT MATTERS", x: 540, y: 330, fontSize: 82, weight: 950, fill: "#FFFFFF", maxChars: 16, maxLines: 1, anchor: "middle" })}
-    <rect x="90" y="520" width="900" height="520" rx="46" fill="#020617" stroke="#FACC15" stroke-width="6" filter="url(#shadow)"/>
-    ${textBlock({ text: hardLimitText(story.why, 175), x: 140, y: 705, fontSize: 66, weight: 950, fill: "#FACC15", maxChars: 23, maxLines: 4, lineHeight: 0.95 })}
-    <rect x="100" y="1195" width="880" height="220" rx="44" fill="#0F172A" stroke="#38BDF8" stroke-width="5"/>
-    ${textBlock({ text: "This is the viewer payoff.", x: 540, y: 1330, fontSize: 52, weight: 950, fill: "#22D3EE", maxChars: 27, maxLines: 1, anchor: "middle" })}
+  slides.push(`${baseSvg(4, "PASS FAIL")}
+    ${textBlock({ text: "DID IT PASS?", x: 540, y: 330, fontSize: 90, weight: 950, fill: "#FFFFFF", maxChars: 13, maxLines: 1, anchor: "middle" })}
+    <rect x="90" y="520" width="900" height="250" rx="46" fill="#052E16" stroke="#22C55E" stroke-width="6" filter="url(#shadow)"/>
+    ${textBlock({ text: "YES", x: 150, y: 680, fontSize: 78, weight: 950, fill: "#86EFAC", maxChars: 3, maxLines: 1 })}
+    ${textBlock({ text: hardLimitText(s.pass1, 35), x: 330, y: 675, fontSize: 62, weight: 950, fill: "#FFFFFF", maxChars: 16, maxLines: 2, lineHeight: 0.95 })}
+    <rect x="90" y="845" width="900" height="250" rx="46" fill="#052E16" stroke="#22C55E" stroke-width="6" filter="url(#shadow)"/>
+    ${textBlock({ text: "YES", x: 150, y: 1005, fontSize: 78, weight: 950, fill: "#86EFAC", maxChars: 3, maxLines: 1 })}
+    ${textBlock({ text: hardLimitText(s.pass2, 35), x: 330, y: 1000, fontSize: 62, weight: 950, fill: "#FFFFFF", maxChars: 16, maxLines: 2, lineHeight: 0.95 })}
+    <rect x="90" y="1170" width="900" height="250" rx="46" fill="#451A03" stroke="#FACC15" stroke-width="6" filter="url(#shadow)"/>
+    ${textBlock({ text: "BUT", x: 150, y: 1330, fontSize: 78, weight: 950, fill: "#FACC15", maxChars: 3, maxLines: 1 })}
+    ${textBlock({ text: hardLimitText(s.pass3, 35), x: 330, y: 1325, fontSize: 62, weight: 950, fill: "#FFFFFF", maxChars: 16, maxLines: 2, lineHeight: 0.95 })}
   ${closeSvg()}`);
 
-  slides.push(`${baseSvg(5, "USE OR SKIP")}
-    ${textBlock({ text: "USE IT OR SKIP IT?", x: 540, y: 310, fontSize: 80, weight: 950, fill: "#FFFFFF", maxChars: 21, maxLines: 1, anchor: "middle" })}
-    <rect x="90" y="455" width="900" height="345" rx="42" fill="#052E16" stroke="#22C55E" stroke-width="6" filter="url(#shadow)"/>
-    ${textBlock({ text: "USE IT IF", x: 140, y: 560, fontSize: 48, weight: 950, fill: "#86EFAC", maxChars: 12, maxLines: 1 })}
-    ${textBlock({ text: hardLimitText(story.use, 150), x: 140, y: 660, fontSize: 47, weight: 900, fill: "#FFFFFF", maxChars: 32, maxLines: 3, lineHeight: 0.98 })}
-    <rect x="90" y="910" width="900" height="345" rx="42" fill="#450A0A" stroke="#FB7185" stroke-width="6" filter="url(#shadow)"/>
-    ${textBlock({ text: "SKIP IT IF", x: 140, y: 1015, fontSize: 48, weight: 950, fill: "#FDA4AF", maxChars: 12, maxLines: 1 })}
-    ${textBlock({ text: hardLimitText(story.skip, 150), x: 140, y: 1115, fontSize: 47, weight: 900, fill: "#FFFFFF", maxChars: 32, maxLines: 3, lineHeight: 0.98 })}
-    <rect x="100" y="1410" width="880" height="140" rx="42" fill="#111827" stroke="#FACC15" stroke-width="5"/>
-    ${textBlock({ text: hardLimitText(story.verdict, 70), x: 540, y: 1498, fontSize: 44, weight: 950, fill: "#FACC15", maxChars: 30, maxLines: 2, anchor: "middle", lineHeight: 0.92 })}
+  slides.push(`${baseSvg(5, "WHY CARE")}
+    ${textBlock({ text: "WHY THIS MATTERS", x: 540, y: 310, fontSize: 82, weight: 950, fill: "#FFFFFF", maxChars: 18, maxLines: 1, anchor: "middle" })}
+    <rect x="90" y="500" width="900" height="560" rx="48" fill="#020617" stroke="#FACC15" stroke-width="7" filter="url(#shadow)"/>
+    ${textBlock({ text: hardLimitText(s.payoff, 170), x: 140, y: 700, fontSize: 66, weight: 950, fill: "#FACC15", maxChars: 23, maxLines: 4, lineHeight: 0.95 })}
+    <rect x="100" y="1205" width="880" height="220" rx="44" fill="#0F172A" stroke="#38BDF8" stroke-width="5"/>
+    ${textBlock({ text: "This is the actual reason to care.", x: 540, y: 1340, fontSize: 50, weight: 950, fill: "#22D3EE", maxChars: 34, maxLines: 2, anchor: "middle", lineHeight: 0.95 })}
   ${closeSvg()}`);
 
-  slides.push(`${baseSvg(6, "THE CATCH")}
-    ${textBlock({ text: "THE CATCH", x: 540, y: 360, fontSize: 98, weight: 950, fill: "#38BDF8", maxChars: 11, maxLines: 1, anchor: "middle" })}
-    <rect x="90" y="540" width="900" height="470" rx="46" fill="#020617" stroke="#D946EF" stroke-width="6" filter="url(#shadow)"/>
-    ${textBlock({ text: hardLimitText(story.danger, 155), x: 140, y: 720, fontSize: 66, weight: 950, fill: "#FFFFFF", maxChars: 23, maxLines: 4, lineHeight: 0.95 })}
-    <rect x="100" y="1190" width="880" height="225" rx="44" fill="#0F172A" stroke="#38BDF8" stroke-width="5"/>
-    ${textBlock({ text: "Do not buy the hype. Test the job.", x: 540, y: 1325, fontSize: 50, weight: 950, fill: "#22D3EE", maxChars: 34, maxLines: 2, anchor: "middle", lineHeight: 0.95 })}
+  slides.push(`${baseSvg(6, "VERDICT")}
+    ${textBlock({ text: "MY VERDICT", x: 540, y: 310, fontSize: 90, weight: 950, fill: "#FFFFFF", maxChars: 12, maxLines: 1, anchor: "middle" })}
+    <rect x="90" y="485" width="900" height="420" rx="48" fill="#111827" stroke="#FACC15" stroke-width="7" filter="url(#shadow)"/>
+    ${textBlock({ text: hardLimitText(s.verdict, 95), x: 540, y: 720, fontSize: 72, weight: 950, fill: "#FACC15", maxChars: 19, maxLines: 3, anchor: "middle", lineHeight: 0.92 })}
+    <rect x="90" y="1035" width="900" height="310" rx="44" fill="#020617" stroke="#D946EF" stroke-width="6"/>
+    ${textBlock({ text: "THE CATCH", x: 140, y: 1145, fontSize: 48, weight: 950, fill: "#F0ABFC", maxChars: 12, maxLines: 1 })}
+    ${textBlock({ text: hardLimitText(s.danger, 120), x: 140, y: 1240, fontSize: 45, weight: 900, fill: "#FFFFFF", maxChars: 32, maxLines: 3, lineHeight: 0.96 })}
   ${closeSvg()}`);
 
   slides.push(`${baseSvg(7, "NEXT TEST")}
-    ${textBlock({ text: "WHAT SHOULD I TEST NEXT?", x: 540, y: 470, fontSize: 76, weight: 950, fill: "#FFFFFF", maxChars: 26, maxLines: 2, anchor: "middle", lineHeight: 0.95 })}
+    ${textBlock({ text: "WHAT SHOULD I TEST NEXT?", x: 540, y: 465, fontSize: 76, weight: 950, fill: "#FFFFFF", maxChars: 26, maxLines: 2, anchor: "middle", lineHeight: 0.95 })}
     <rect x="120" y="725" width="840" height="320" rx="42" fill="#020617" stroke="#38BDF8" stroke-width="5"/>
-    ${textBlock({ text: story.comment, x: 170, y: 845, fontSize: 49, weight: 900, fill: "#E5E7EB", maxChars: 29, maxLines: 4, lineHeight: 1.06 })}
+    ${textBlock({ text: s.comment, x: 170, y: 845, fontSize: 49, weight: 900, fill: "#E5E7EB", maxChars: 29, maxLines: 4, lineHeight: 1.06 })}
     <rect x="170" y="1170" width="740" height="132" rx="66" fill="#FFFFFF"/>
     ${textBlock({ text: "COMMENT RECEIPTS", x: 540, y: 1258, fontSize: 48, weight: 950, fill: "#020617", maxChars: 22, maxLines: 1, anchor: "middle" })}
   ${closeSvg()}`);
@@ -548,7 +617,7 @@ async function renderMp4ForRecord(recordId) {
       slidePaths.push(slidePath);
     }
 
-    const durations = [1.7, 2.4, 2.5, 2.5, 2.8, 2.4, 2.2];
+    const durations = [1.6, 2.2, 2.5, 2.2, 2.5, 2.4, 2.0];
     let concatText = "";
     for (let i = 0; i < slidePaths.length; i++) {
       concatText += `file '${slidePaths[i].replace(/'/g, "'\\''")}'\n`;
@@ -631,12 +700,12 @@ app.get("/health", (req, res) => {
     r2Configured: Boolean(r2Client && R2_PUBLIC_BASE_URL && R2_BUCKET),
     bucket: R2_BUCKET,
     cloudinary: false,
-    layout: "proof-footage-v7-receipt-test-face-locked",
+    layout: "proof-footage-v8-three-job-story-face-locked",
     video: "ffmpeg-r2-proof-footage-v2-face-locked",
     dimensions: `${OUTPUT_WIDTH}x${OUTPUT_HEIGHT}`,
     designCanvas: `${WIDTH}x${HEIGHT}`,
     r2KeyPrefix: R2_PREFIX,
-    renderMode: "proof-footage-v7-simple-story-no-jargon",
+    renderMode: "proof-footage-v8-examples-passfail-payoff",
     queueRunning,
     queuedJobs: renderQueue.length,
     ffmpegPath: Boolean(ffmpegPath),
