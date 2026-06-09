@@ -39,6 +39,14 @@ const jobs = new Map();
 const renderErrors = new Map();
 const renderAttempts = new Map();
 
+process.on("uncaughtException", (error) => {
+  console.error("UNCAUGHT_EXCEPTION", error);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("UNHANDLED_REJECTION", reason);
+});
+
 function r2Client() {
   if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) return null;
   return new S3Client({
@@ -394,11 +402,11 @@ app.get("/health", (req, res) => {
     r2Configured: !!r2Client(),
     airtableConfigured: !!AIRTABLE_TOKEN,
     bucket: R2_BUCKET,
-    layout: "prompt-pack-v2-debug-orange-black-carousel",
-    video: "ffmpeg-r2-prompt-pack-v2-debug",
+    layout: "prompt-pack-v3-foreground-render-debug",
+    video: "ffmpeg-r2-prompt-pack-v3-foreground",
     dimensions: "1080x1350",
     r2KeyPrefix: R2_PREFIX,
-    renderMode: "prompt-pack-v2-debug-visible-errors",
+    renderMode: "prompt-pack-v3-foreground-no-background-job-loss",
     queueRunning: [...jobs.values()].some(j => j.status === "rendering"),
     queuedJobs: [...jobs.values()].filter(j => j.status === "queued" || j.status === "rendering").length,
     ffmpegPath: !!ffmpegPath,
@@ -450,30 +458,43 @@ app.post("/render/aitl-prompt-pack-video", async (req, res) => {
     createdAt: new Date().toISOString()
   });
 
-  renderPromptPack(recordId).catch((error) => {
+  try {
+    await renderPromptPack(recordId);
+
+    const finished = jobs.get(recordId) || {
+      ok: true,
+      recordId,
+      status: "ready",
+      videoUrl
+    };
+
+    return res.json({
+      ok: true,
+      renderId: `aitl_prompt_pack_${recordId}`,
+      status: finished.status || "ready",
+      videoUrl: finished.videoUrl || videoUrl,
+      storage: "r2",
+      attempt: renderAttempts.get(recordId) || null,
+      notes: "Prompt Pack V3 foreground render completed."
+    });
+  } catch (error) {
     const failure = {
       ok: false,
       recordId,
       status: "failed",
       error: error.message,
       stack: String(error.stack || "").slice(0, 4000),
-      stage: renderAttempts.get(recordId)?.stage || "background_unhandled",
+      stage: renderAttempts.get(recordId)?.stage || "foreground_unhandled",
       attempt: renderAttempts.get(recordId) || null,
       videoUrl,
       updatedAt: new Date().toISOString()
     };
+
     jobs.set(recordId, failure);
     renderErrors.set(recordId, failure);
-  });
 
-  res.json({
-    ok: true,
-    renderId: `aitl_prompt_pack_${recordId}`,
-    status: "rendering",
-    videoUrl,
-    storage: "r2",
-    notes: "Prompt Pack V2 debug render queued."
-  });
+    return res.status(500).json(failure);
+  }
 });
 
 app.get("/render/aitl-prompt-pack-video/status/:recordId", async (req, res) => {
@@ -518,5 +539,5 @@ app.get("/debug/prompt-pack/:recordId", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`AI Tool Logbook Prompt Pack Renderer V2 debug running on port ${PORT}`);
+  console.log(`AI Tool Logbook Prompt Pack Renderer V3 foreground running on port ${PORT}`);
 });
