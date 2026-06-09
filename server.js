@@ -253,107 +253,159 @@ async function buildSlides(source) {
   const outputLines = splitOutputLines(source.outputExcerpt || source.rawOutput, 8);
   const reactionData = await imageToDataUri(source.reactionImageUrl);
 
+  function shortToolName(name) {
+    return String(name || "this AI tool")
+      .replace(/\s*\([^)]*\)/g, "")
+      .replace(/\s*\/\s*Serper.*$/i, "")
+      .replace(/\s*\/\s*JSON mode.*$/i, "")
+      .replace(/\s*for text-only.*$/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function simpleOutputLine() {
+    const raw = outputLines.find(line => line && !/no generated|not captured|homepage|n\/a/i.test(line)) || source.outputExcerpt || source.rawOutput || "";
+    const cleaned = String(raw).replace(/\{|\}|\[|\]|"|#/g, "").replace(/\s+/g, " ").trim();
+    if (!cleaned || /no generated|not captured|no output/i.test(cleaned)) return "No real receipt. No recommendation.";
+    return cleaned;
+  }
+
+  const tool = shortToolName(source.toolName);
+  const lowerTool = String(source.toolName || "").toLowerCase();
+
+  const isSearch = lowerTool.includes("serp") || lowerTool.includes("serper") || lowerTool.includes("search api");
+  const isOpenAIJson = lowerTool.includes("openai") && lowerTool.includes("json");
+  const isOpenAI = lowerTool.includes("openai") || lowerTool.includes("chatgpt");
+  const isAutomation = lowerTool.includes("n8n") || lowerTool.includes("workflow") || lowerTool.includes("automation");
+  const isDesign = lowerTool.includes("canva") || lowerTool.includes("design") || lowerTool.includes("image");
+
+  const category = isSearch ? "research tool" : isOpenAI || isOpenAIJson ? "API tool" : isAutomation ? "automation tool" : isDesign ? "design AI" : "AI tool";
+
+  let bigQuestion = "Can this tool save me time without creating garbage?";
+  let realJob = "I gave it a real creator task and checked if the result was actually usable.";
+  let whyCare = "Because a tool only matters if it helps me publish better content faster.";
+  let whatCameBack = simpleOutputLine();
+  let catchLine = source.proofLine || source.skipItIf || "You still have to check the answer before trusting it.";
+  let useIf = source.useItIf || "you need help finishing the job faster";
+  let skipIf = source.skipItIf || "you need perfect results without checking anything";
+  let finalVerdict = "Useful — but only if you check the output.";
+
+  if (isSearch) {
+    bigQuestion = "Can it stop me from repeating fake AI claims?";
+    realJob = "I asked it to find proof before I use a claim in a video.";
+    whyCare = "One fake claim makes the whole channel look lazy.";
+    whatCameBack = "It brought back search evidence I could check.";
+    catchLine = "It finds receipts. It does not think for you.";
+    useIf = "you need proof before quoting a trend, price, or benchmark";
+    skipIf = "you want a finished opinion without checking sources";
+    finalVerdict = "Good for receipts. Bad for lazy research.";
+  } else if (isOpenAIJson) {
+    bigQuestion = "Can it turn messy ideas into clean JSON?";
+    realJob = "I asked it to format content so automation can use it.";
+    whyCare = "Bad JSON breaks workflows and wastes time.";
+    whatCameBack = "It gave structured output I could send to the next step.";
+    catchLine = "The structure can work, but you still need rules.";
+    useIf = "you need clean fields for Airtable, n8n, or scripts";
+    skipIf = "you expect perfect structure with weak prompts";
+    finalVerdict = "Useful for automation — not magic.";
+  } else if (isOpenAI) {
+    bigQuestion = "Can it turn a messy request into usable content?";
+    realJob = "I gave it a real creator workflow, not a fake demo prompt.";
+    whyCare = "A good answer should help me make something today.";
+    whatCameBack = simpleOutputLine() || "It gave a usable draft, but it still needed checking.";
+    catchLine = "Fast answers are not the same as finished work.";
+    useIf = "you need a strong first draft or structure";
+    skipIf = "you do not want to review or edit the result";
+    finalVerdict = "Good helper. Not an autopilot.";
+  } else if (isAutomation) {
+    bigQuestion = "Can it remove one boring manual step?";
+    realJob = "I checked if this could move work forward without me clicking everything.";
+    whyCare = "If it saves clicks every day, it compounds.";
+    whatCameBack = simpleOutputLine() || "It showed a way to connect steps in a workflow.";
+    catchLine = "Automation still breaks if the inputs are messy.";
+    useIf = "you repeat the same task over and over";
+    skipIf = "your process changes every time";
+    finalVerdict = "Worth testing if the task repeats.";
+  } else if (isDesign) {
+    bigQuestion = "Can it make something I would actually post?";
+    realJob = "I asked it for output, not a pretty sales-page promise.";
+    whyCare = "Pretty does not matter if the result is unusable.";
+    whatCameBack = simpleOutputLine();
+    catchLine = "If there is no generated design captured, there is no proof.";
+    useIf = "you can capture and compare the actual design output";
+    skipIf = "you only have claims, not a real generated result";
+    finalVerdict = "No receipt, no recommendation.";
+  }
+
+  const scoreNumber = Number(String(source.totalScore || "").replace(/[^\d.]/g, ""));
+  if (scoreNumber >= 26 && !isSearch && !isOpenAIJson && !isOpenAI && !isAutomation && !isDesign) finalVerdict = "Strong result — still check it.";
+  if (scoreNumber < 22) finalVerdict = "Not enough proof yet.";
+
   const faceSvg = reactionData
     ? `<image href="${reactionData}" x="-170" y="165" width="650" height="1180" preserveAspectRatio="xMidYMid slice" opacity="1"/>
        <rect x="0" y="0" width="470" height="1920" fill="url(#bg)" opacity="0.05"/>`
     : `<rect x="0" y="210" width="430" height="990" rx="40" fill="#06121F" stroke="#38BDF8" stroke-width="4"/>
        ${textBlock({ text: "REACTION IMAGE", x: 215, y: 650, fontSize: 42, weight: 950, fill: "#38BDF8", maxChars: 16, maxLines: 2, anchor: "middle" })}`;
 
-  const tool = source.toolName || "this AI tool";
-  const lowerTool = String(tool).toLowerCase();
-  const isDesign = lowerTool.includes("canva") || lowerTool.includes("design") || lowerTool.includes("image");
-  const isApi = lowerTool.includes("api") || lowerTool.includes("openai") || lowerTool.includes("claude") || lowerTool.includes("groq") || lowerTool.includes("router");
-  const isAutomation = lowerTool.includes("n8n") || lowerTool.includes("workflow") || lowerTool.includes("automation");
-
-  const category = isDesign ? "design AI" : isApi ? "API tool" : isAutomation ? "automation tool" : "AI tool";
-  const pain = source.falseBelief || source.proofPrompt || source.proofInput || "Can this actually help a creator workflow?";
-  const usefulOutput = outputLines.find(line => line && !/no generated|not captured|homepage/i.test(line)) || source.outputExcerpt || source.rawOutput || "It produced a usable workflow answer.";
-  const useLine = source.useItIf || "you need a faster workflow without guessing";
-  const skipLine = source.skipItIf || source.proofLine || "the output does not match your real process";
-  const takeaway = source.takeaway || "The tool only matters if the result can survive a real workflow.";
-  const reframe = source.reframeLine || source.proofLine || "Real input. Real output. Real decision.";
-  const scoreNumber = Number(String(source.totalScore || "").replace(/[^\d.]/g, ""));
-  const quickVerdict = scoreNumber >= 26
-    ? "This is worth a real test."
-    : scoreNumber >= 22
-      ? "Useful, but I would not trust it blindly."
-      : "Not enough proof yet.";
-  const hookLine = isDesign
-    ? "I asked it to make something useful. Then the receipt got awkward."
-    : isApi
-      ? "I gave it a real workflow task. The answer was not the part that mattered."
-      : isAutomation
-        ? "I tested whether this could remove a real bottleneck."
-        : "I tested this like a creator would actually use it.";
-  const riskLine = source.proofLine || source.downside || "The danger is trusting a polished answer before checking the output.";
   const ctaBody = `Comment another ${category}. I will test the result, not the sales page.`;
   const ctaButton = source.ctaKeyword ? `COMMENT ${String(source.ctaKeyword).toUpperCase().slice(0, 18)}` : "COMMENT RECEIPTS";
 
   const slides = [];
 
-  slides.push(`${baseSvg(1, "REAL TEST")}
+  slides.push(`${baseSvg(1, "THE QUESTION")}
     ${faceSvg}
-    ${textBlock({ text: "I TESTED", x: 458, y: 400, fontSize: 112, weight: 950, fill: "#FFFFFF", maxChars: 9, maxLines: 1 })}
-    ${textBlock({ text: hardLimitText(tool, 28), x: 458, y: 535, fontSize: 76, weight: 950, fill: "#38BDF8", maxChars: 15, maxLines: 2, lineHeight: 1.0 })}
-    ${textBlock({ text: hardLimitText(hookLine, 95), x: 505, y: 815, fontSize: 42, weight: 950, fill: "#FFFFFF", maxChars: 25, maxLines: 4, lineHeight: 1.03 })}
-    <rect x="430" y="1115" width="590" height="250" rx="34" fill="#020617" stroke="#D946EF" stroke-width="4" filter="url(#shadow)"/>
-    ${textBlock({ text: "NOT A REVIEW.", x: 725, y: 1200, fontSize: 46, weight: 950, fill: "#F0ABFC", maxChars: 14, maxLines: 1, anchor: "middle" })}
-    ${textBlock({ text: "A real workflow test.", x: 725, y: 1278, fontSize: 42, weight: 950, fill: "#FFFFFF", maxChars: 22, maxLines: 1, anchor: "middle" })}
-    ${metricCard({ x: 42, y: 1482, label: "Simple verdict", value: quickVerdict.includes("not") ? "SKIP?" : "TEST?", color: "#38BDF8", icon: "?" })}
-    ${metricCard({ x: 380, y: 1482, label: "Proof level", value: scoreNumber >= 26 ? "STRONG" : scoreNumber >= 22 ? "OK" : "WEAK", color: "#D946EF", icon: "!" })}
-    ${metricCard({ x: 718, y: 1482, label: "Risk", value: "CHECK", color: "#FACC15", icon: "⚠" })}
+    ${textBlock({ text: "I TESTED", x: 458, y: 380, fontSize: 105, weight: 950, fill: "#FFFFFF", maxChars: 9, maxLines: 1 })}
+    ${textBlock({ text: hardLimitText(tool, 24), x: 458, y: 510, fontSize: 76, weight: 950, fill: "#38BDF8", maxChars: 15, maxLines: 2, lineHeight: 1.0 })}
+    <rect x="430" y="760" width="590" height="470" rx="38" fill="#020617" stroke="#D946EF" stroke-width="5" filter="url(#shadow)"/>
+    ${textBlock({ text: hardLimitText(bigQuestion, 115), x: 470, y: 900, fontSize: 58, weight: 950, fill: "#FFFFFF", maxChars: 20, maxLines: 4, lineHeight: 0.98 })}
+    <rect x="470" y="1310" width="510" height="108" rx="54" fill="#FFFFFF"/>
+    ${textBlock({ text: "REAL TEST. NO HYPE.", x: 725, y: 1380, fontSize: 34, weight: 950, fill: "#020617", maxChars: 19, maxLines: 1, anchor: "middle" })}
   ${closeSvg()}`);
 
-  slides.push(`${baseSvg(2, "THE TASK")}
-    ${textBlock({ text: "THE REAL TASK", x: 90, y: 340, fontSize: 86, weight: 950, fill: "#FFFFFF", maxChars: 16, maxLines: 1 })}
-    ${textBlock({ text: "I did not ask: “is this tool cool?”", x: 90, y: 465, fontSize: 48, weight: 900, fill: "#F0ABFC", maxChars: 34, maxLines: 2 })}
-    <rect x="70" y="610" width="940" height="600" rx="40" fill="#020617" stroke="#38BDF8" stroke-width="5" filter="url(#shadow)"/>
-    ${textBlock({ text: hardLimitText(pain, 360), x: 125, y: 735, fontSize: 54, weight: 950, fill: "#FFFFFF", maxChars: 27, maxLines: 8, lineHeight: 1.02 })}
-    <rect x="95" y="1325" width="890" height="170" rx="40" fill="#092132" stroke="#22D3EE" stroke-width="4"/>
-    ${textBlock({ text: "If it cannot solve this, I do not care.", x: 540, y: 1433, fontSize: 46, weight: 950, fill: "#22D3EE", maxChars: 34, maxLines: 1, anchor: "middle" })}
+  slides.push(`${baseSvg(2, "THE JOB")}
+    ${textBlock({ text: "THE JOB", x: 90, y: 335, fontSize: 95, weight: 950, fill: "#FFFFFF", maxChars: 8, maxLines: 1 })}
+    ${textBlock({ text: "This is the whole point:", x: 90, y: 465, fontSize: 54, weight: 950, fill: "#38BDF8", maxChars: 24, maxLines: 1 })}
+    <rect x="70" y="600" width="940" height="570" rx="44" fill="#020617" stroke="#38BDF8" stroke-width="5" filter="url(#shadow)"/>
+    ${textBlock({ text: hardLimitText(realJob, 230), x: 125, y: 750, fontSize: 64, weight: 950, fill: "#FFFFFF", maxChars: 24, maxLines: 5, lineHeight: 0.98 })}
+    <rect x="95" y="1305" width="890" height="175" rx="44" fill="#111827" stroke="#FACC15" stroke-width="5"/>
+    ${textBlock({ text: "If it fails this, I do not care.", x: 540, y: 1415, fontSize: 50, weight: 950, fill: "#FACC15", maxChars: 31, maxLines: 1, anchor: "middle" })}
   ${closeSvg()}`);
 
   slides.push(`${baseSvg(3, "THE RECEIPT")}
-    ${textBlock({ text: "THE RECEIPT", x: 90, y: 330, fontSize: 88, weight: 950, fill: "#FFFFFF", maxChars: 13, maxLines: 1 })}
-    ${textBlock({ text: "This is the part that matters.", x: 90, y: 450, fontSize: 48, weight: 900, fill: "#38BDF8", maxChars: 32, maxLines: 1 })}
-    <rect x="70" y="550" width="940" height="860" rx="36" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="3"/>
-    ${outputLines.slice(0, 5).map((line, i) => `
-      <rect x="110" y="${640 + i * 132}" width="860" height="98" rx="22" fill="${i === 0 ? "#DCFCE7" : i % 2 ? "#EEF2FF" : "#FFFFFF"}" stroke="${i === 0 ? "#22C55E" : "#E2E8F0"}" stroke-width="3"/>
-      ${textBlock({ text: hardLimitText(line, 86), x: 145, y: 702 + i * 132, fontSize: 32, weight: i === 0 ? 950 : 830, fill: "#020617", maxChars: 38, maxLines: 2, lineHeight: 0.96 })}
-    `).join("\n")}
-    <rect x="110" y="1490" width="860" height="128" rx="34" fill="#052E16" stroke="#22C55E" stroke-width="5"/>
-    ${textBlock({ text: "IF THERE IS NO RECEIPT, THERE IS NO REVIEW.", x: 540, y: 1570, fontSize: 38, weight: 950, fill: "#86EFAC", maxChars: 40, maxLines: 1, anchor: "middle" })}
+    ${textBlock({ text: "WHAT CAME BACK?", x: 90, y: 330, fontSize: 82, weight: 950, fill: "#FFFFFF", maxChars: 17, maxLines: 1 })}
+    <rect x="70" y="500" width="940" height="640" rx="42" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="3"/>
+    ${textBlock({ text: hardLimitText(whatCameBack, 210), x: 125, y: 685, fontSize: 58, weight: 950, fill: "#020617", maxChars: 24, maxLines: 5, lineHeight: 0.98 })}
+    <rect x="100" y="1260" width="880" height="210" rx="44" fill="#052E16" stroke="#22C55E" stroke-width="6"/>
+    ${textBlock({ text: "This is the receipt. Not the promise.", x: 540, y: 1390, fontSize: 48, weight: 950, fill: "#86EFAC", maxChars: 35, maxLines: 2, anchor: "middle", lineHeight: 0.95 })}
   ${closeSvg()}`);
 
-  slides.push(`${baseSvg(4, "PLAIN ENGLISH")}
-    ${textBlock({ text: "EXPLAIN IT LIKE I’M 10", x: 540, y: 320, fontSize: 72, weight: 950, fill: "#FFFFFF", maxChars: 24, maxLines: 2, anchor: "middle", lineHeight: 0.95 })}
-    <rect x="90" y="500" width="900" height="310" rx="42" fill="#020617" stroke="#A3E635" stroke-width="6" filter="url(#shadow)"/>
-    ${textBlock({ text: "Did it help?", x: 140, y: 620, fontSize: 68, weight: 950, fill: "#A3E635", maxChars: 14, maxLines: 1 })}
-    ${textBlock({ text: scoreNumber >= 22 ? "Yes — it gave something I could actually use." : "Not enough to trust yet.", x: 140, y: 720, fontSize: 45, weight: 900, fill: "#FFFFFF", maxChars: 33, maxLines: 2, lineHeight: 1.0 })}
-    <rect x="90" y="900" width="900" height="310" rx="42" fill="#020617" stroke="#38BDF8" stroke-width="6" filter="url(#shadow)"/>
-    ${textBlock({ text: "What is the catch?", x: 140, y: 1020, fontSize: 58, weight: 950, fill: "#38BDF8", maxChars: 20, maxLines: 1 })}
-    ${textBlock({ text: hardLimitText(riskLine, 135), x: 140, y: 1110, fontSize: 40, weight: 900, fill: "#FFFFFF", maxChars: 36, maxLines: 3, lineHeight: 1.0 })}
-    <rect x="90" y="1300" width="900" height="210" rx="42" fill="#111827" stroke="#FACC15" stroke-width="6"/>
-    ${textBlock({ text: quickVerdict, x: 540, y: 1428, fontSize: 48, weight: 950, fill: "#FACC15", maxChars: 31, maxLines: 2, anchor: "middle", lineHeight: 0.95 })}
+  slides.push(`${baseSvg(4, "WHY CARE")}
+    ${textBlock({ text: "WHY SHOULD YOU CARE?", x: 540, y: 330, fontSize: 72, weight: 950, fill: "#FFFFFF", maxChars: 22, maxLines: 2, anchor: "middle", lineHeight: 0.95 })}
+    <rect x="90" y="520" width="900" height="460" rx="46" fill="#020617" stroke="#FACC15" stroke-width="6" filter="url(#shadow)"/>
+    ${textBlock({ text: hardLimitText(whyCare, 190), x: 140, y: 695, fontSize: 62, weight: 950, fill: "#FACC15", maxChars: 24, maxLines: 4, lineHeight: 0.98 })}
+    <rect x="90" y="1110" width="900" height="280" rx="44" fill="#020617" stroke="#38BDF8" stroke-width="6"/>
+    ${textBlock({ text: "Plain English:", x: 140, y: 1210, fontSize: 48, weight: 950, fill: "#38BDF8", maxChars: 15, maxLines: 1 })}
+    ${textBlock({ text: finalVerdict, x: 140, y: 1300, fontSize: 48, weight: 950, fill: "#FFFFFF", maxChars: 31, maxLines: 2, lineHeight: 0.96 })}
   ${closeSvg()}`);
 
   slides.push(`${baseSvg(5, "USE OR SKIP")}
-    ${textBlock({ text: "USE IT OR SKIP IT?", x: 540, y: 330, fontSize: 80, weight: 950, fill: "#FFFFFF", maxChars: 21, maxLines: 1, anchor: "middle" })}
-    <rect x="90" y="500" width="900" height="350" rx="42" fill="#052E16" stroke="#22C55E" stroke-width="6" filter="url(#shadow)"/>
-    ${textBlock({ text: "USE IT IF", x: 140, y: 610, fontSize: 48, weight: 950, fill: "#86EFAC", maxChars: 12, maxLines: 1 })}
-    ${textBlock({ text: hardLimitText(useLine, 170), x: 140, y: 710, fontSize: 43, weight: 900, fill: "#FFFFFF", maxChars: 34, maxLines: 3, lineHeight: 1.02 })}
-    <rect x="90" y="965" width="900" height="350" rx="42" fill="#450A0A" stroke="#FB7185" stroke-width="6" filter="url(#shadow)"/>
-    ${textBlock({ text: "SKIP IT IF", x: 140, y: 1075, fontSize: 48, weight: 950, fill: "#FDA4AF", maxChars: 12, maxLines: 1 })}
-    ${textBlock({ text: hardLimitText(skipLine, 170), x: 140, y: 1175, fontSize: 43, weight: 900, fill: "#FFFFFF", maxChars: 34, maxLines: 3, lineHeight: 1.02 })}
-    <rect x="100" y="1450" width="880" height="120" rx="42" fill="#111827" stroke="#FACC15" stroke-width="5"/>
-    ${textBlock({ text: scoreNumber >= 22 ? "GOOD TOOL. STILL NEEDS CHECKING." : "NOT ENOUGH PROOF.", x: 540, y: 1526, fontSize: 38, weight: 950, fill: "#FACC15", maxChars: 34, maxLines: 1, anchor: "middle" })}
+    ${textBlock({ text: "USE IT OR SKIP IT?", x: 540, y: 315, fontSize: 80, weight: 950, fill: "#FFFFFF", maxChars: 21, maxLines: 1, anchor: "middle" })}
+    <rect x="90" y="470" width="900" height="340" rx="42" fill="#052E16" stroke="#22C55E" stroke-width="6" filter="url(#shadow)"/>
+    ${textBlock({ text: "USE IT IF", x: 140, y: 575, fontSize: 48, weight: 950, fill: "#86EFAC", maxChars: 12, maxLines: 1 })}
+    ${textBlock({ text: hardLimitText(useIf, 155), x: 140, y: 675, fontSize: 45, weight: 900, fill: "#FFFFFF", maxChars: 33, maxLines: 3, lineHeight: 1.0 })}
+    <rect x="90" y="925" width="900" height="340" rx="42" fill="#450A0A" stroke="#FB7185" stroke-width="6" filter="url(#shadow)"/>
+    ${textBlock({ text: "SKIP IT IF", x: 140, y: 1030, fontSize: 48, weight: 950, fill: "#FDA4AF", maxChars: 12, maxLines: 1 })}
+    ${textBlock({ text: hardLimitText(skipIf, 155), x: 140, y: 1130, fontSize: 45, weight: 900, fill: "#FFFFFF", maxChars: 33, maxLines: 3, lineHeight: 1.0 })}
+    <rect x="100" y="1420" width="880" height="130" rx="42" fill="#111827" stroke="#FACC15" stroke-width="5"/>
+    ${textBlock({ text: finalVerdict, x: 540, y: 1502, fontSize: 40, weight: 950, fill: "#FACC15", maxChars: 34, maxLines: 2, anchor: "middle", lineHeight: 0.95 })}
   ${closeSvg()}`);
 
-  slides.push(`${baseSvg(6, "THE RULE")}
-    ${textBlock({ text: "THE RULE", x: 540, y: 380, fontSize: 100, weight: 950, fill: "#38BDF8", maxChars: 10, maxLines: 1, anchor: "middle" })}
-    ${textBlock({ text: hardLimitText(takeaway, 210), x: 100, y: 610, fontSize: 62, weight: 950, fill: "#FFFFFF", maxChars: 25, maxLines: 5, lineHeight: 1.04 })}
-    <rect x="100" y="1230" width="880" height="250" rx="42" fill="#020617" stroke="#D946EF" stroke-width="5"/>
-    ${textBlock({ text: hardLimitText(reframe, 115), x: 540, y: 1368, fontSize: 38, weight: 950, fill: "#F0ABFC", maxChars: 34, maxLines: 3, anchor: "middle", lineHeight: 1.0 })}
+  slides.push(`${baseSvg(6, "THE CATCH")}
+    ${textBlock({ text: "THE CATCH", x: 540, y: 370, fontSize: 98, weight: 950, fill: "#38BDF8", maxChars: 11, maxLines: 1, anchor: "middle" })}
+    <rect x="90" y="545" width="900" height="440" rx="46" fill="#020617" stroke="#D946EF" stroke-width="6" filter="url(#shadow)"/>
+    ${textBlock({ text: hardLimitText(catchLine, 185), x: 140, y: 705, fontSize: 60, weight: 950, fill: "#FFFFFF", maxChars: 24, maxLines: 4, lineHeight: 0.98 })}
+    <rect x="100" y="1185" width="880" height="225" rx="44" fill="#0F172A" stroke="#38BDF8" stroke-width="5"/>
+    ${textBlock({ text: "Do not buy the hype. Test the job.", x: 540, y: 1320, fontSize: 50, weight: 950, fill: "#22D3EE", maxChars: 34, maxLines: 2, anchor: "middle", lineHeight: 0.95 })}
   ${closeSvg()}`);
 
   slides.push(`${baseSvg(7, "NEXT TEST")}
@@ -449,7 +501,7 @@ async function renderMp4ForRecord(recordId) {
       slidePaths.push(slidePath);
     }
 
-    const durations = [1.8, 3.0, 4.0, 3.0, 2.8, 2.8, 2.6];
+    const durations = [1.8, 2.6, 2.8, 2.8, 3.0, 2.6, 2.4];
     let concatText = "";
     for (let i = 0; i < slidePaths.length; i++) {
       concatText += `file '${slidePaths[i].replace(/'/g, "'\\''")}'\n`;
@@ -532,12 +584,12 @@ app.get("/health", (req, res) => {
     r2Configured: Boolean(r2Client && R2_PUBLIC_BASE_URL && R2_BUCKET),
     bucket: R2_BUCKET,
     cloudinary: false,
-    layout: "proof-footage-v5-human-stakes-face-locked",
+    layout: "proof-footage-v6-one-point-face-locked",
     video: "ffmpeg-r2-proof-footage-v2-face-locked",
     dimensions: `${OUTPUT_WIDTH}x${OUTPUT_HEIGHT}`,
     designCanvas: `${WIDTH}x${HEIGHT}`,
     r2KeyPrefix: R2_PREFIX,
-    renderMode: "proof-footage-v5-human-stakes-no-dead-metrics",
+    renderMode: "proof-footage-v6-one-point-simple-no-jargon",
     queueRunning,
     queuedJobs: renderQueue.length,
     ffmpegPath: Boolean(ffmpegPath),
